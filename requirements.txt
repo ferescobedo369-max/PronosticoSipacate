@@ -1,0 +1,15 @@
+pandas
+
+geopandas
+
+shapely
+
+openmeteo-requests
+
+requests_cache
+
+retry_requests
+
+matplotlib
+
+scipy
