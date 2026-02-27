@@ -1,0 +1,34 @@
+name: Actualizacion Pronostico ICC
+on:
+  schedule:
+    - cron: '0 12 * * *' # Esto corre a las 6:00 AM de Guatemala
+  workflow_dispatch: # Botón para correrlo manualmente
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar codigo
+        uses: actions/checkout@v3
+      
+      - name: Instalar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          
+      - name: Instalar Librerias
+        run: pip install -r requirements.txt
+          
+      - name: Ejecutar Script de Pronostico
+        run: python 1_Condiciones_medianas_y_promedio.py
+        
+      - name: Ejecutar Script de Mapas
+        run: python 3_Mapa_200.py
+
+      - name: Guardar resultados en el repositorio
+        run: |
+          git config --global user.name 'GitHub Action'
+          git config --global user.email 'action@github.com'
+          git add 2_Results/*
+          git commit -m "Actualización automática de pronóstico" || exit 0
+          git push
