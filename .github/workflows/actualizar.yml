@@ -1,8 +1,8 @@
 name: Actualizacion Pronostico ICC
 on:
   schedule:
-    - cron: '0 12 * * *' # Esto corre a las 6:00 AM de Guatemala
-  workflow_dispatch: # Botón para correrlo manualmente
+    - cron: '0 12 * * *' # 6:00 AM Guatemala
+  workflow_dispatch:
 
 jobs:
   build:
@@ -19,16 +19,18 @@ jobs:
       - name: Instalar Librerias
         run: pip install -r requirements.txt
           
-      - name: Ejecutar Script de Pronostico
+      - name: Generar Datos CSV
+        # Nombre exacto según tu captura de pantalla
         run: python 1_Condiciones_medianas_y_promedio.py
         
-      - name: Ejecutar Script de Mapas
+      - name: Generar Mapas y Graficas
+        # Nombre exacto según tu captura de pantalla
         run: python 3_Mapa_200.py
 
       - name: Guardar resultados en el repositorio
         run: |
           git config --global user.name 'GitHub Action'
           git config --global user.email 'action@github.com'
-          git add 2_Results/*
+          git add .
           git commit -m "Actualización automática de pronóstico" || exit 0
           git push
