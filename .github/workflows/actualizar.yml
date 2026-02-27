@@ -20,12 +20,12 @@ jobs:
         run: pip install -r requirements.txt
           
       - name: Generar Datos CSV
-        # Nombre exacto según tu captura de pantalla
-        run: python 1_Condiciones_medianas_y_promedio.py
+        # Nombre corregido según tus archivos en GitHub
+        run: python 1_Median_and_average_conditions.py
         
       - name: Generar Mapas y Graficas
-        # Nombre exacto según tu captura de pantalla
-        run: python 3_Mapa_200.py
+        # Nombre corregido según tus archivos en GitHub
+        run: python 3_Map_200.py
 
       - name: Guardar resultados en el repositorio
         run: |
