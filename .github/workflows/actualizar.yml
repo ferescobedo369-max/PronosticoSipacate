@@ -1,36 +1,53 @@
-name: Actualizacion Pronostico ICC
+name: Actualizacion Pronostico Sipacate
+
 on:
   schedule:
-    - cron: '0 12 * * *' # 6:00 AM Guatemala
-  workflow_dispatch:
+    # 7:00 AM Guatemala = 13:00 UTC (Guatemala es UTC-6, sin horario de verano)
+    - cron: '0 13 * * *'
+  workflow_dispatch:  # Permite correrlo manualmente desde GitHub
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
+      # 1. Descargar el código del repositorio
       - name: Descargar codigo
-        uses: actions/checkout@v3
-      
-      - name: Instalar Python
-        uses: actions/setup-python@v4
+        uses: actions/checkout@v4
         with:
-          python-version: '3.10'
-          
-      - name: Instalar Librerias
-        run: pip install -r requirements.txt
-          
-      - name: Generar Datos CSV
-        # Nombre corregido según tus archivos en GitHub
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # 2. Configurar Python
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # 3. Instalar dependencias del sistema para geopandas
+      - name: Instalar dependencias del sistema
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libgdal-dev gdal-bin libspatialindex-dev
+
+      # 4. Instalar librerías Python
+      - name: Instalar librerias Python
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # 5. Ejecutar Script 1: extracción y cálculo de datos
+      - name: Generar datos CSV
         run: python 1_Median_and_average_conditions.py
-        
-      - name: Generar Mapas y Graficas
-        # Nombre corregido según tus archivos en GitHub
+
+      # 6. Ejecutar Script 2: mapas y series de tiempo
+      - name: Generar mapas y graficas
         run: python 3_Map_200.py
 
+      # 7. Hacer commit de los resultados al repositorio
       - name: Guardar resultados en el repositorio
         run: |
-          git config --global user.name 'GitHub Action'
+          git config --global user.name 'actions-user'
           git config --global user.email 'action@github.com'
-          git add .
-          git commit -m "Actualización automática de pronóstico" || exit 0
+          git add 2_Results/
+          git diff --staged --quiet || git commit -m "Actualización automática de pronóstico - $(TZ='America/Guatemala' date +'%Y-%m-%d %H:%M') hora Guatemala"
           git push
