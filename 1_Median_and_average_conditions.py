@@ -1,3 +1,10 @@
+"""
+Script 1: Extracción de datos meteorológicos y cálculo de estadísticas de área.
+- Descarga datos horarios de Open-Meteo (ECMWF IFS) para múltiples puntos dentro del polígono.
+- Calcula velocidad a 200m usando Ley de Potencia (alpha dinámico desde 10m y 100m).
+- Guarda CSV con promedios y medianas en carpeta YYYYMMDD.
+"""
+
 import os
 import numpy as np
 import pandas as pd
@@ -9,45 +16,36 @@ import requests_cache
 from retry_requests import retry
 
 # ---------------------------------------------------------
-# Paths CORREGIDOS PARA GITHUB
+# Rutas (compatibles con GitHub Actions)
 # ---------------------------------------------------------
-# Detecta la ubicación del script en el repositorio
 base_dir = os.path.dirname(os.path.abspath(__file__))
-
-# Las carpetas deben llamarse exactamente como las subiste a GitHub
 shapefile_path = os.path.join(base_dir, "1_Shapefile", "Area_of_interest.shp")
 results_dir = os.path.join(base_dir, "2_Results")
-
-# Crear carpeta de resultados si no existe
 os.makedirs(results_dir, exist_ok=True)
 
 # ---------------------------------------------------------
-# Read shapefile (ensure WGS84)
+# Leer shapefile
 # ---------------------------------------------------------
 if not os.path.exists(shapefile_path):
-    raise FileNotFoundError(f"No se encontró el shapefile en: {shapefile_path}")
+    raise FileNotFoundError(f"Shapefile no encontrado en: {shapefile_path}")
 
 gdf = gpd.read_file(shapefile_path)
 if gdf.crs is None or gdf.crs.to_epsg() != 4326:
     gdf = gdf.to_crs(epsg=4326)
 
-# Unified polygon (in case of multipart geometries)
 try:
     polygon = gdf.union_all()
 except AttributeError:
     polygon = gdf.unary_union
 
 # ---------------------------------------------------------
-# Build grid of points inside polygon
+# Rejilla de puntos dentro del polígono
 # ---------------------------------------------------------
 minx, miny, maxx, maxy = polygon.bounds
 
 target_res_deg = 0.1
-width_lon = maxx - minx
-width_lat = maxy - miny
-
-n_lon = max(3, int(width_lon / target_res_deg) + 1)
-n_lat = max(3, int(width_lat / target_res_deg) + 1)
+n_lon = max(3, int((maxx - minx) / target_res_deg) + 1)
+n_lat = max(3, int((maxy - miny) / target_res_deg) + 1)
 
 lon_vals = np.linspace(minx, maxx, n_lon)
 lat_vals = np.linspace(miny, maxy, n_lat)
@@ -55,25 +53,24 @@ lat_vals = np.linspace(miny, maxy, n_lat)
 points = []
 for lat in lat_vals:
     for lon in lon_vals:
-        p = Point(lon, lat)
-        if polygon.contains(p):
+        if polygon.contains(Point(lon, lat)):
             points.append((lat, lon))
 
 if not points:
-    raise RuntimeError("No grid points fell inside the polygon.")
+    raise RuntimeError("No se encontraron puntos dentro del polígono.")
 
-print(f"Using {len(points)} grid points inside polygon for areal statistics.")
+print(f"Usando {len(points)} puntos de muestreo dentro del polígono.")
 
 # ---------------------------------------------------------
-# Setup Open-Meteo client
+# Cliente Open-Meteo
 # ---------------------------------------------------------
-# El cache se guarda en una carpeta temporal en la nube
 cache_session = requests_cache.CachedSession('.cache', expire_after=3600)
 retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
 openmeteo = openmeteo_requests.Client(session=retry_session)
 
 url = "https://api.open-meteo.com/v1/forecast"
 
+# Variables nativas a solicitar (SIN 200m — se calcula por Ley de Potencia)
 hourly_vars = [
     "temperature_2m",
     "wind_speed_10m",
@@ -84,8 +81,10 @@ hourly_vars = [
     "rain"
 ]
 
+ALPHA_DEFAULT = 0.143  # Coeficiente de Hellmann estándar para terreno neutro
+
 # ---------------------------------------------------------
-# Loop over points, collect hourly data
+# Descarga de datos por punto
 # ---------------------------------------------------------
 all_dfs = []
 
@@ -102,8 +101,8 @@ for (lat, lon) in points:
 
     responses = openmeteo.weather_api(url, params=params)
     response = responses[0]
-
     hourly = response.Hourly()
+
     vals = [hourly.Variables(i).ValuesAsNumpy() for i in range(len(hourly_vars))]
 
     date_index = pd.date_range(
@@ -118,30 +117,58 @@ for (lat, lon) in points:
         data[name] = arr
 
     df_point = pd.DataFrame(data)
+
+    # ---------------------------------------------------------
+    # Ley de Potencia del Viento → velocidad a 200m
+    # v200 = v100 * (200/100)^alpha
+    # alpha = ln(v100/v10) / ln(100/10)  [dinámico por hora]
+    # ---------------------------------------------------------
+    v10  = df_point["wind_speed_10m"].values.copy()
+    v100 = df_point["wind_speed_100m"].values.copy()
+
+    alpha = np.full(len(v10), ALPHA_DEFAULT, dtype=float)
+
+    # Calcular alpha dinámico donde ambas velocidades sean > 0.5 km/h
+    valid = (v10 > 0.5) & (v100 > 0.5)
+    ratio = np.where(valid, v100 / v10, np.nan)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        alpha_dyn = np.log(ratio) / np.log(100.0 / 10.0)
+
+    # Aplicar alpha dinámico solo donde es físicamente razonable (0 < alpha < 0.6)
+    ok = valid & np.isfinite(alpha_dyn) & (alpha_dyn > 0) & (alpha_dyn < 0.6)
+    alpha[ok] = alpha_dyn[ok]
+
+    v200 = v100 * (200.0 / 100.0) ** alpha
+    df_point["wind_speed_200m"]    = v200
+    df_point["wind_direction_200m"] = df_point["wind_direction_100m"]  # misma dirección que 100m
+    df_point["alpha_shear"]        = alpha  # guardamos alpha para diagnóstico
+
     all_dfs.append(df_point)
 
 df_all = pd.concat(all_dfs, ignore_index=True)
 
 # ---------------------------------------------------------
-# Areal mean & median per hour
+# Estadísticas de área: media y mediana por hora
 # ---------------------------------------------------------
-var_cols = hourly_vars
-agg = df_all.groupby("date")[var_cols].agg(["mean", "median"]).reset_index()
+all_cols = hourly_vars + ["wind_speed_200m", "wind_direction_200m", "alpha_shear"]
 
-agg.columns = ["date"] + [
-    f"{var}_{stat}"
-    for var in var_cols
-    for stat in ["mean", "median"]
-]
+agg = df_all.groupby("date")[all_cols].agg(["mean", "median"]).reset_index()
+agg.columns = ["date"] + [f"{var}_{stat}" for var in all_cols for stat in ["mean", "median"]]
 
 # ---------------------------------------------------------
-# Save result
+# Guardar CSV en carpeta YYYYMMDD
 # ---------------------------------------------------------
 run_date_str = pd.Timestamp.now(tz="America/Guatemala").strftime("%Y%m%d")
+daily_folder = os.path.join(results_dir, run_date_str)
+os.makedirs(daily_folder, exist_ok=True)
 
-# NOTA: En GitHub, simplificaremos la ruta para que Power BI la encuentre siempre igual
-output_file = os.path.join(results_dir, f"Area_forecast_latest.csv")
-
+output_file = os.path.join(daily_folder, f"Area_forecast_mean_median_{run_date_str}.csv")
 agg.to_csv(output_file, index=False, encoding="utf-8")
 
-print(f"\nProceso completado. Datos guardados en: {output_file}")
+# También guardar copia "latest" para Power BI u otras herramientas
+latest_file = os.path.join(results_dir, "Area_forecast_latest.csv")
+agg.to_csv(latest_file, index=False, encoding="utf-8")
+
+print(f"\nDatos guardados en:")
+print(f"  Por fecha : {output_file}")
+print(f"  Latest    : {latest_file}")
