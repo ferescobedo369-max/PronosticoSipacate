@@ -1,7 +1,7 @@
 """
-Script 5: Envío automático del boletín por correo Gmail
-- Lee Boletin_latest.docx desde 2_Results/
-- Envía a la lista de destinatarios configurada en GitHub Secrets
+Script 5: Envío automático del boletín PDF por correo Gmail
+- Lee Boletin_latest.pdf desde 2_Results/
+- Envía a lista de destinatarios configurada en GitHub Secrets
 - Usa Gmail con contraseña de aplicación (App Password)
 """
 
@@ -14,38 +14,38 @@ from email import encoders
 from datetime import datetime
 
 # ---------------------------------------------------------
-# Configuración desde variables de entorno (GitHub Secrets)
+# Configuración desde GitHub Secrets
 # ---------------------------------------------------------
 GMAIL_USER    = os.environ.get("GMAIL_USER", "")
 GMAIL_PASS    = os.environ.get("GMAIL_PASSWORD", "")
-DESTINATARIOS = os.environ.get("DESTINATARIOS", "")  # emails separados por coma
+DESTINATARIOS = os.environ.get("DESTINATARIOS", "")
 
-# Rutas
-base_dir      = os.path.dirname(os.path.abspath(__file__))
-results_dir   = os.path.join(base_dir, "2_Results")
-boletin_path  = os.path.join(results_dir, "Boletin_latest.docx")
+base_dir     = os.path.dirname(os.path.abspath(__file__))
+results_dir  = os.path.join(base_dir, "2_Results")
+pdf_path     = os.path.join(results_dir, "Boletin_latest.pdf")
 
 # ---------------------------------------------------------
 # Verificaciones
 # ---------------------------------------------------------
 if not GMAIL_USER or not GMAIL_PASS:
-    print("⚠️  GMAIL_USER o GMAIL_PASSWORD no configurados. Saltando envío de correo.")
+    print("⚠️  GMAIL_USER o GMAIL_PASSWORD no configurados. Saltando envío.")
     exit(0)
 
 if not DESTINATARIOS:
-    print("⚠️  DESTINATARIOS no configurado. Saltando envío de correo.")
+    print("⚠️  DESTINATARIOS no configurado. Saltando envío.")
     exit(0)
 
-if not os.path.exists(boletin_path):
-    print(f"⚠️  No se encontró el boletín en: {boletin_path}")
+if not os.path.exists(pdf_path):
+    print(f"⚠️  No se encontró el PDF en: {pdf_path}")
     exit(1)
 
 # ---------------------------------------------------------
 # Preparar correo
 # ---------------------------------------------------------
-fecha_hoy    = datetime.now().strftime("%d/%m/%Y")
-correlativo  = f"BO{datetime.now().strftime('%d%m%y')}"
+fecha_hoy     = datetime.now().strftime("%d/%m/%Y")
+correlativo   = f"BO{datetime.now().strftime('%d%m%y')}"
 lista_destino = [d.strip() for d in DESTINATARIOS.split(",") if d.strip()]
+nombre_pdf    = f"Boletin_Sipacate_{correlativo}.pdf"
 
 asunto = f"Boletín de viento Sipacate {correlativo} – {fecha_hoy}"
 
@@ -56,7 +56,7 @@ cuerpo_html = f"""
   <p>Estimados,</p>
 
   <p>
-    Se adjunta el <strong>Boletín de Condiciones de Viento {correlativo}</strong> 
+    Se adjunta el <strong>Boletín de Condiciones de Viento {correlativo}</strong>
     para el área de Sipacate, correspondiente al pronóstico del día <strong>{fecha_hoy}</strong>.
   </p>
 
@@ -69,7 +69,7 @@ cuerpo_html = f"""
   </ul>
 
   <p style="color: #555; font-size: 12px;">
-    Este correo fue generado y enviado automáticamente por el sistema de pronóstico 
+    Este correo fue generado y enviado automáticamente por el sistema de pronóstico
     del ICC – CeH y SSP. Los datos provienen del modelo ECMWF IFS vía Open-Meteo API.
   </p>
 
@@ -84,27 +84,25 @@ cuerpo_html = f"""
 # ---------------------------------------------------------
 # Construir mensaje
 # ---------------------------------------------------------
-msg = MIMEMultipart()
+msg            = MIMEMultipart()
 msg['From']    = GMAIL_USER
 msg['To']      = ", ".join(lista_destino)
 msg['Subject'] = asunto
 
 msg.attach(MIMEText(cuerpo_html, 'html'))
 
-# Adjuntar el boletín Word
-with open(boletin_path, "rb") as f:
-    adjunto = MIMEBase('application', 'vnd.openxmlformats-officedocument.wordprocessingml.document')
+# Adjuntar PDF
+with open(pdf_path, "rb") as f:
+    adjunto = MIMEBase('application', 'pdf')
     adjunto.set_payload(f.read())
     encoders.encode_base64(adjunto)
-    nombre_adjunto = f"Boletin_Sipacate_{correlativo}.docx"
-    adjunto.add_header('Content-Disposition', f'attachment; filename="{nombre_adjunto}"')
+    adjunto.add_header('Content-Disposition', f'attachment; filename="{nombre_pdf}"')
     msg.attach(adjunto)
 
 # ---------------------------------------------------------
-# Enviar
+# Enviar por Gmail SSL
 # ---------------------------------------------------------
 print(f"📧 Enviando boletín a {len(lista_destino)} destinatario(s)...")
-print(f"   Destinatarios: {', '.join(lista_destino)}")
 
 try:
     with smtplib.SMTP_SSL('smtp.gmail.com', 465) as servidor:
@@ -112,13 +110,13 @@ try:
         servidor.sendmail(GMAIL_USER, lista_destino, msg.as_string())
 
     print(f"✅ Correo enviado exitosamente.")
-    print(f"   Asunto : {asunto}")
-    print(f"   Adjunto: {nombre_adjunto}")
+    print(f"   Asunto    : {asunto}")
+    print(f"   Adjunto   : {nombre_pdf}")
+    print(f"   Enviado a : {', '.join(lista_destino)}")
 
 except smtplib.SMTPAuthenticationError:
     print("❌ Error de autenticación Gmail.")
-    print("   Verifica que GMAIL_USER y GMAIL_PASSWORD estén correctos.")
-    print("   Recuerda usar una 'Contraseña de aplicación', no tu contraseña normal.")
+    print("   Usa una 'Contraseña de aplicación' de Google, no tu contraseña normal.")
     exit(1)
 except Exception as e:
     print(f"❌ Error al enviar correo: {e}")
