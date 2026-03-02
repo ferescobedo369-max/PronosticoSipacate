@@ -1,357 +1,439 @@
 """
-Generador Automático de Boletines de Viento - Sipacate
-Genera boletines en formato Word con pronósticos de viento y análisis automático
-Versión 2.0 - Con análisis inteligente automático
+Script: Generador Automático de Boletín de Viento - Sipacate
+- Lee Area_forecast_latest.csv generado por Script 1
+- Genera análisis automático de dirección y velocidad
+- Produce Boletin_Sipacate_BODDMMYY.docx usando la plantilla
+- Compatible con GitHub Actions (sin rutas locales)
 """
 
 import os
+import shutil
 import pandas as pd
+import numpy as np
 from docx import Document
-from docx.shared import Inches, Pt, RGBColor
+from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from datetime import datetime, timedelta
-import locale
 
-# Importar módulo de análisis
-from analisis_viento import (
-    leer_datos_pronostico,
-    generar_interpretacion_automatica,
-    generar_interpretacion_velocidad,
-    validar_datos,
-    obtener_estadisticas_dia
-)
+# ---------------------------------------------------------
+# Rutas (relativas al repo en GitHub Actions)
+# ---------------------------------------------------------
+base_dir    = os.path.dirname(os.path.abspath(__file__))
+results_dir = os.path.join(base_dir, "2_Results")
+plantilla   = os.path.join(base_dir, "0_Archivos_Recibidos", "plantilla_de_boletin.docx")
+csv_path    = os.path.join(results_dir, "Area_forecast_latest.csv")
 
-# Configurar locale a español (si está disponible)
-try:
-    locale.setlocale(locale.LC_TIME, 'es_ES.UTF-8')
-except:
-    try:
-        locale.setlocale(locale.LC_TIME, 'Spanish_Spain.1252')
-    except:
-        print("⚠️ No se pudo configurar locale español, usando inglés")
+# ---------------------------------------------------------
+# Helpers de fechas en español
+# ---------------------------------------------------------
+DIAS_ES = {
+    'Monday':'lunes','Tuesday':'martes','Wednesday':'miércoles',
+    'Thursday':'jueves','Friday':'viernes','Saturday':'sábado','Sunday':'domingo'
+}
+MESES_ES = {
+    'January':'enero','February':'febrero','March':'marzo','April':'abril',
+    'May':'mayo','June':'junio','July':'julio','August':'agosto',
+    'September':'septiembre','October':'octubre','November':'noviembre','December':'diciembre'
+}
 
-# ===================== CONFIGURACIÓN DE RUTAS =====================
-RUTA_BASE = r"C:\DATA\OneDrive - Asazgua\SSP\Información generada por Fernando\Zafra 25-26\Sipacate"
-PATH_PLANTILLA = os.path.join(RUTA_BASE, "Boletines", "plantilla de boletin.docx")
-PATH_IMAGENES = os.path.join(RUTA_BASE, "Pronosticos", "Wind_forecasts", "2_Results")
-PATH_SALIDA = os.path.join(RUTA_BASE, "Boletines")
+def dia_es(fecha):
+    return DIAS_ES.get(fecha.strftime('%A'), fecha.strftime('%A'))
 
-# ===================== FUNCIONES AUXILIARES =====================
+def mes_es(fecha):
+    return MESES_ES.get(fecha.strftime('%B'), fecha.strftime('%B'))
 
-def obtener_nombre_dia_espanol(fecha):
-    """Convierte fecha a nombre del día en español"""
-    dias = {
-        'Monday': 'lunes',
-        'Tuesday': 'martes',  
-        'Wednesday': 'miércoles',
-        'Thursday': 'jueves',
-        'Friday': 'viernes',
-        'Saturday': 'sábado',
-        'Sunday': 'domingo'
-    }
-    nombre_ingles = fecha.strftime('%A')
-    return dias.get(nombre_ingles, nombre_ingles)
+# ---------------------------------------------------------
+# Leer CSV
+# ---------------------------------------------------------
+def leer_datos(csv_path):
+    df = pd.read_csv(csv_path)
+    df['date'] = pd.to_datetime(df['date'], utc=True).dt.tz_convert('America/Guatemala')
+    df['date'] = df['date'].dt.tz_localize(None)  # quitar tz para simplificar comparaciones
+    return df
 
-def obtener_nombre_mes_espanol(fecha):
-    """Convierte fecha a nombre del mes en español"""
-    meses = {
-        'January': 'enero',
-        'February': 'febrero',
-        'March': 'marzo',
-        'April': 'abril',
-        'May': 'mayo',
-        'June': 'junio',
-        'July': 'julio',
-        'August': 'agosto',
-        'September': 'septiembre',
-        'October': 'octubre',
-        'November': 'noviembre',
-        'December': 'diciembre'
-    }
-    nombre_ingles = fecha.strftime('%B')
-    return meses.get(nombre_ingles, nombre_ingles)
-
-def buscar_graficas_pronostico(fecha, path_imagenes):
+# ---------------------------------------------------------
+# Análisis de DIRECCIÓN para un día
+# ---------------------------------------------------------
+def analizar_direccion(df_dia, dia_nombre, dia_num, mes_nombre):
     """
-    Busca las 4 gráficas de serie de tiempo para el boletín
-    Ahora busca en carpeta raíz de 2_Results
+    Genera texto interpretativo de dirección del viento
+    basado en los datos horarios de wind_direction_10m
     """
-    fecha_str = fecha.strftime("%Y%m%d")
-    graficas = {
-        'direccion_10m': None,
-        'direccion_100m': None,
-        'velocidad_10m': None,
-        'velocidad_100m': None
-    }
-    
-    for archivo in os.listdir(path_imagenes):
-        if fecha_str in archivo and archivo.endswith(".png"):
-            if "Serie_ciclo_diario_wind_direction_10m" in archivo:
-                graficas['direccion_10m'] = os.path.join(path_imagenes, archivo)
-            elif "Serie_ciclo_diario_wind_direction_100m" in archivo:
-                graficas['direccion_100m'] = os.path.join(path_imagenes, archivo)
-            elif "Serie_ciclo_diario_wind_speed_10m" in archivo:
-                graficas['velocidad_10m'] = os.path.join(path_imagenes, archivo)
-            elif "Serie_ciclo_diario_wind_speed_100m" in archivo:
-                graficas['velocidad_100m'] = os.path.join(path_imagenes, archivo)
-    
-    return graficas
+    dir_10m = df_dia['wind_direction_10m'].values
+    horas   = df_dia['Hora'].values if 'Hora' in df_dia.columns else df_dia['date'].dt.hour.values
 
-# ===================== FUNCIÓN PRINCIPAL =====================
+    def es_favorable(grados):
+        return 90 <= grados <= 270
 
-def generar_boletin_automatico(fecha_inicio=None):
-    """
-    Genera un boletín de viento en formato Word con análisis automático
-    
-    Parámetros:
-    - fecha_inicio: datetime object. Si es None, usa la fecha actual
-    """
-    
-    # Usar fecha actual si no se especifica
-    if fecha_inicio is None:
-        fecha_inicio = datetime.now()
-    
-    # Generar correlativo (BO + DDMMYY)
-    correlativo = f"BO{fecha_inicio.strftime('%d%m%y')}"
-    
-    print(f"\n{'='*60}")
-    print(f"🔄 Generando Boletín {correlativo}")
-    print(f"{'='*60}")
-    
-    # Verificar que existe la plantilla
-    if not os.path.exists(PATH_PLANTILLA):
-        print(f"❌ Error: No se encontró la plantilla en:\n   {PATH_PLANTILLA}")
-        return False
-    
-    if not os.path.exists(PATH_IMAGENES):
-        print(f"❌ Error: No se encontró la carpeta de imágenes en:\n   {PATH_IMAGENES}")
-        return False
-    
-    # ============ LEER Y VALIDAR DATOS DE PRONÓSTICO ============
-    print(f"\n📊 Cargando datos de pronóstico...")
-    df_pronostico = leer_datos_pronostico(fecha_inicio, os.path.join(RUTA_BASE, "Pronosticos", "Wind_forecasts"))
-    
-    if not validar_datos(df_pronostico):
-        print(f"❌ Error: Datos de pronóstico no válidos")
-        return False
-    
-    # Cargar plantilla
-    print(f"\n📄 Cargando plantilla...")
-    doc = Document(PATH_PLANTILLA)
-    
-    # ============ ENCABEZADO DEL BOLETÍN ============
-    print(f"✍️  Agregando encabezado...")
-    
-    # Correlativo
-    p_correlativo = doc.add_paragraph()
-    p_correlativo.add_run(f"Correlativo {correlativo}").bold = True
-    p_correlativo.paragraph_format.space_after = Pt(6)
-    
-    # ICC
-    p_icc = doc.add_paragraph("ICC: CeH y SSP")
-    p_icc.paragraph_format.space_after = Pt(12)
-    
-    # Título principal
-    p_titulo = doc.add_paragraph()
-    run_titulo = p_titulo.add_run("Condiciones de viento proyectadas para las zonas buffer prioritaria")
-    run_titulo.bold = True
-    run_titulo.font.size = Pt(14)
-    p_titulo.paragraph_format.space_after = Pt(12)
-    
-    # Fechas del pronóstico (3 días consecutivos)
-    dia1 = fecha_inicio
-    dia2 = fecha_inicio + timedelta(days=1)
-    dia3 = fecha_inicio + timedelta(days=2)
-    
-    mes = obtener_nombre_mes_espanol(dia1)
-    anio = dia1.year
-    
-    texto_fechas = f"Pronósticos de horarios indicados para el {dia1.day}, {dia2.day} de {obtener_nombre_mes_espanol(dia1)} y {dia3.day} de {obtener_nombre_mes_espanol(dia3)} {anio}."
-    p_fechas = doc.add_paragraph(texto_fechas)
-    p_fechas.paragraph_format.space_after = Pt(12)
-    
-    # ============ INTERPRETACIÓN GENERAL (CONSTANTE) ============
-    print(f"📋 Agregando texto de interpretación general...")
-    
-    p_interp_titulo = doc.add_paragraph()
-    p_interp_titulo.add_run("Interpretación: ").bold = True
-    p_interp_titulo.add_run("""Para facilitar el análisis, la gráfica utiliza un sistema de colores: las áreas en rosado representan condiciones no favorables (no aptas para realizar la quema), mientras que las franjas en verde indican periodos favorables para la operación.
-Cada línea de color en el gráfico corresponde a una fecha específica del calendario. En la línea horizontal, se detallan las horas del día (de 0 a 23:59), donde cada cuadrícula representa un intervalo de 2 horas.""")
-    p_interp_titulo.paragraph_format.space_after = Pt(6)
-    
-    # Zonas no favorables
-    p_zona_rosa = doc.add_paragraph()
-    p_zona_rosa.add_run("• Zonas no favorables (franjas rosadas): ").bold = True
-    p_zona_rosa.add_run("Representan los horarios donde el viento sopla predominantemente hacia el Sur (entre los 0° y 90°, y de 270° a 360°).")
-    
-    # Zonas favorables
-    p_zona_verde = doc.add_paragraph()
-    p_zona_verde.add_run("• Zonas favorables (franja verde): ").bold = True
-    p_zona_verde.add_run("Corresponden a los momentos en que el viento mantiene una dirección hacia el Norte (entre los 90° y 270°). Estas condiciones son las adecuadas para realizar la actividad de quemas ya que se espera un desplazamiento de la pavesa al norte.")
-    
-    # Líneas de colores
-    p_lineas = doc.add_paragraph()
-    p_lineas.add_run("Líneas de colores: ").bold = True
-    p_lineas.add_run("Significan una fecha en el calendario.")
-    p_lineas.paragraph_format.space_after = Pt(12)
-    
-    # ============ INSERTAR GRÁFICAS ============
-    print(f"\n🖼️  Buscando e insertando gráficas...")
-    
-    graficas = buscar_graficas_pronostico(fecha_inicio, PATH_IMAGENES)
-    
-    # Insertar las 4 gráficas en orden
-    graficas_orden = [
-        ('direccion_10m', 'Dirección del viento a 10 metros'),
-        ('direccion_100m', 'Dirección del viento a 100 metros'),
-        ('velocidad_10m', 'Velocidad del viento a 10 metros'), 
-        ('velocidad_100m', 'Velocidad del viento a 100 metros')
-    ]
-    
-    for key, titulo_base in graficas_orden:
-        if graficas[key]:
-            print(f"   ✅ Insertando gráfica: {key}")
-            
-            # TÍTULO EN NEGRITA ARRIBA DE LA GRÁFICA
-            p = doc.add_paragraph()
-            run = p.add_run(titulo_base)
-            run.bold = True
-            run.font.size = Pt(11)
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            p.paragraph_format.space_before = Pt(6)
-            p.paragraph_format.space_after = Pt(6)
-            
-            # IMAGEN
-            doc.add_picture(graficas[key], width=Inches(6.0))
-            doc.add_paragraph().paragraph_format.space_after = Pt(12)
+    favorable_mask = np.array([es_favorable(d) for d in dir_10m])
+    horas_fav   = int(favorable_mask.sum())
+    horas_nofav = int((~favorable_mask).sum())
+
+    # Hora de inicio del bloque favorable principal
+    inicio_fav = None
+    fin_fav    = None
+    max_bloque = 0
+    bloque_actual = 0
+    inicio_actual = None
+
+    for i, (h, fav) in enumerate(zip(horas, favorable_mask)):
+        if fav:
+            if bloque_actual == 0:
+                inicio_actual = h
+            bloque_actual += 1
         else:
-            print(f"   ⚠️ No se encontró gráfica: {key}")
-    
-    # ============ ANÁLISIS POR DÍA (AUTOMÁTICO) ============
-    print(f"\n📊 Generando análisis automático de viento por día...")
-    
-    # Título de sección
-    p_analisis_titulo = doc.add_paragraph()
-    run_analisis = p_analisis_titulo.add_run("Dirección del viento")
-    run_analisis.bold = True
-    run_analisis.font.size = Pt(13)
-    p_analisis_titulo.paragraph_format.space_before = Pt(12)
-    p_analisis_titulo.paragraph_format.space_after = Pt(12)
-    
-    fechas_analisis = [dia1, dia2, dia3]
-    
-    for idx, fecha in enumerate(fechas_analisis):
-        dia_nombre = obtener_nombre_dia_espanol(fecha)
-        dia_num = fecha.day
-        mes_nombre = obtener_nombre_mes_espanol(fecha)
-        
-        # Filtrar datos del día específico
-        df_dia = df_pronostico[df_pronostico['date'].dt.date == fecha.date()].copy()
-        
-        if df_dia.empty:
-            print(f"   ⚠️ No hay datos para {dia_nombre} {dia_num}")
-            continue
-        
-        # Obtener estadísticas para debugging
-        stats = obtener_estadisticas_dia(fecha, df_dia)
-        print(f"   📈 {dia_nombre} {dia_num}: {stats['10m']['horas_favorables']}h favorables, "
-              f"{stats['10m']['transiciones']} transiciones")
-        
-        # GENERAR INTERPRETACIÓN AUTOMÁTICA
-        interpretacion = generar_interpretacion_automatica(
-            fecha,
-            df_dia,
-            dia_nombre,
-            dia_num,
-            mes_nombre
-        )
-        
-        # Agregar al documento
-        p = doc.add_paragraph()
-        p.add_run(f"{dia_nombre.capitalize()} {dia_num} de {mes_nombre}: ").bold = True
-        p.add_run(interpretacion)
-        p.paragraph_format.space_after = Pt(12)
-        
-        print(f"   ✅ Análisis generado para {dia_nombre} {dia_num}")
-    
-    # ============ ANÁLISIS DE VELOCIDAD POR DÍA (AUTOMÁTICO) ============
-    print(f"\n🌬️  Generando análisis automático de velocidad por día...")
-    
-    # Título de sección de velocidad
-    p_velocidad_titulo = doc.add_paragraph()
-    run_velocidad = p_velocidad_titulo.add_run("Velocidad del viento")
-    run_velocidad.bold = True
-    run_velocidad.font.size = Pt(13)
-    p_velocidad_titulo.paragraph_format.space_before = Pt(12)
-    p_velocidad_titulo.paragraph_format.space_after = Pt(12)
-    
-    for idx, fecha in enumerate(fechas_analisis):
-        dia_nombre = obtener_nombre_dia_espanol(fecha)
-        dia_num = fecha.day
-        mes_nombre = obtener_nombre_mes_espanol(fecha)
-        
-        # Filtrar datos del día específico
-        df_dia = df_pronostico[df_pronostico['date'].dt.date == fecha.date()].copy()
-        
-        if df_dia.empty:
-            print(f"   ⚠️ No hay datos para {dia_nombre} {dia_num}")
-            continue
-        
-        # GENERAR INTERPRETACIÓN AUTOMÁTICA DE VELOCIDAD
-        interpretacion_vel = generar_interpretacion_velocidad(
-            fecha,
-            df_dia,
-            dia_nombre,
-            dia_num,
-            mes_nombre
-        )
-        
-        # Agregar al documento
-        p = doc.add_paragraph()
-        p.add_run(f"{dia_nombre.capitalize()} {dia_num} de {mes_nombre}: ").bold = True
-        p.add_run(interpretacion_vel)
-        p.paragraph_format.space_after = Pt(12)
-        
-        print(f"   ✅ Análisis de velocidad generado para {dia_nombre} {dia_num}")
-    
-    # ============ GUARDAR DOCUMENTO ============
-    os.makedirs(PATH_SALIDA, exist_ok=True)
-    
-    nombre_archivo = f"Boletin_Sipacate_{correlativo}.docx"
-    ruta_completa = os.path.join(PATH_SALIDA, nombre_archivo)
-    
-    doc.save(ruta_completa)
-    
-    print(f"\n{'='*60}")
-    print(f"✅ BOLETÍN GENERADO EXITOSAMENTE (Con análisis automático)")
-    print(f"{'='*60}")
-    print(f"📁 Ubicación: {ruta_completa}")
-    print(f"📄 Nombre: {nombre_archivo}")
-    print(f"📅 Fecha: {fecha_inicio.strftime('%d/%m/%Y')}")
-    print(f"🔖 Correlativo: {correlativo}")
-    print(f"🤖 Análisis: Generado automáticamente de datos CSV")
-    print(f"{'='*60}\n")
-    
-    return True
+            if bloque_actual > max_bloque:
+                max_bloque  = bloque_actual
+                inicio_fav  = inicio_actual
+                fin_fav     = horas[i-1] if i > 0 else h
+            bloque_actual = 0
 
-# ===================== EJECUCIÓN =====================
+    if bloque_actual > max_bloque:
+        max_bloque = bloque_actual
+        inicio_fav = inicio_actual
+        fin_fav    = horas[-1]
 
-if __name__ == "__main__":
-    print("""
-    ╔════════════════════════════════════════════════════════════╗
-    ║   GENERADOR AUTOMÁTICO DE BOLETINES DE VIENTO - SIPACATE  ║
-    ║              Con Análisis Inteligente v2.0                 ║
-    ╚════════════════════════════════════════════════════════════╝
-    """)
-    
-    # Generar boletín con fecha actual
-    exito = generar_boletin_automatico()
-    
-    if exito:
-        print("\n💡 El boletín se generó con análisis automático de los datos.")
-        print("💡 Las interpretaciones se crearon analizando las direcciones de viento.")
-        print("💡 Puedes abrir el archivo Word para revisarlo y agregar recomendaciones.")
+    # Madrugada (0-6h) — cuántas horas no favorables
+    madrugada_nofav = sum(1 for h, fav in zip(horas, favorable_mask) if h < 7 and not fav)
+
+    # Tarde (12-19h) — cuántas horas favorables
+    tarde_fav = sum(1 for h, fav in zip(horas, favorable_mask) if 12 <= h <= 19 and fav)
+
+    # Noche (20-23h) — cuántas horas no favorables
+    noche_nofav = sum(1 for h, fav in zip(horas, favorable_mask) if h >= 20 and not fav)
+
+    # ------- Construir texto -------
+    partes = []
+
+    # Comportamiento madrugada / mañana
+    if madrugada_nofav >= 4:
+        partes.append(
+            "Se identifica una alta variabilidad del viento durante la madrugada y las "
+            f"primeras horas de la mañana (00:00 - {min(horas[~favorable_mask & (horas < 10)], default=7):02d}:00), "
+            "con el viento soplando frecuentemente en la zona no favorable, es decir hacia el sur."
+        )
     else:
-        print("\n❌ Hubo un error al generar el boletín. Verifica las rutas y archivos.")
-    
-    input("\nPresiona ENTER para salir...")
+        partes.append(
+            "Durante las primeras horas del día se presentan condiciones variables, "
+            "con algunas horas mostrando viento hacia zonas no favorables."
+        )
+
+    # Consolidación favorable
+    if inicio_fav is not None and max_bloque >= 4:
+        partes.append(
+            f"A partir de las {inicio_fav:02d}:00 horas, la dirección se consolida dentro de la "
+            f"zona favorable (90° a 270°) en ambos niveles de altura (10 y 100 metros), "
+            f"manteniendo estabilidad durante la tarde hasta las {min(fin_fav+1, 23):02d}:00 horas aproximadamente."
+        )
+    elif horas_fav >= 6:
+        partes.append(
+            "La dirección se mantiene dentro de la zona favorable durante buena parte del día, "
+            "especialmente durante las horas de la tarde."
+        )
+    else:
+        partes.append(
+            "El viento presenta condiciones predominantemente no favorables durante la mayor "
+            "parte del día, con pocas horas dentro de la zona verde."
+        )
+
+    # Comportamiento nocturno
+    if noche_nofav >= 2:
+        hora_cambio = next((h for h, fav in zip(horas, favorable_mask) if h >= 19 and not fav), 20)
+        partes.append(
+            f"El comportamiento vuelve a mostrar variaciones hacia la zona roja después de "
+            f"las {hora_cambio:02d}:00 horas."
+        )
+
+    return " ".join(partes)
+
+
+# ---------------------------------------------------------
+# Análisis de VELOCIDAD para un día
+# ---------------------------------------------------------
+def analizar_velocidad(df_dia, dia_nombre, dia_num, mes_nombre):
+    """
+    Genera texto interpretativo de velocidad del viento
+    """
+    v10  = df_dia['wind_speed_10m'].values
+    v100 = df_dia['wind_speed_100m'].values
+    horas = df_dia['Hora'].values if 'Hora' in df_dia.columns else df_dia['date'].dt.hour.values
+
+    prom_10  = float(np.mean(v10))
+    prom_100 = float(np.mean(v100))
+    max_10   = float(np.max(v10))
+    hora_max = int(horas[np.argmax(v10)])
+
+    # Horas sobre umbral 10 km/h
+    sobre_umbral = int(np.sum(v10 >= 10))
+    if sobre_umbral > 0:
+        horas_sobre = horas[v10 >= 10]
+        h_ini_umbral = int(horas_sobre[0])
+        h_fin_umbral = int(horas_sobre[-1])
+    else:
+        h_ini_umbral = h_fin_umbral = 0
+
+    # Velocidad mañana vs tarde
+    v_manana = float(np.mean(v10[horas < 10])) if any(horas < 10) else 0
+    v_tarde  = float(np.mean(v10[(horas >= 12) & (horas <= 19)])) if any((horas >= 12) & (horas <= 19)) else 0
+
+    # Diferencia entre niveles
+    diff_niveles = prom_100 - prom_10
+
+    # ------- Construir texto -------
+    partes = []
+
+    # Velocidades promedio
+    partes.append(
+        f"Las velocidades promedio del viento se registran en {prom_10:.1f} km/h a 10 metros "
+        f"de altura y {prom_100:.1f} km/h a 100 metros."
+    )
+
+    # Velocidad máxima
+    intensidad = "moderado a fuerte" if max_10 >= 20 else "moderado" if max_10 >= 10 else "leve a moderado"
+    partes.append(
+        f"Las velocidades máximas alcanzan {max_10:.1f} km/h alrededor de las {hora_max:02d}:00 horas "
+        f"a 10 metros de altura, indicando condiciones de viento {intensidad} durante este periodo."
+    )
+
+    # Horas sobre umbral
+    if sobre_umbral > 0:
+        partes.append(
+            f"Se pronostican velocidades por encima de 10 km/h durante {sobre_umbral} horas del día, "
+            f"principalmente entre las {h_ini_umbral:02d}:00 y {h_fin_umbral:02d}:00 horas."
+        )
+    else:
+        partes.append(
+            "Las velocidades se mantienen por debajo del umbral de 10 km/h durante todo el día."
+        )
+
+    # Incremento mañana → tarde
+    if v_tarde > v_manana and v_tarde > 5:
+        partes.append(
+            f"Se observa un incremento significativo de las velocidades durante la tarde, "
+            f"pasando de {v_manana:.1f} km/h en la mañana a {v_tarde:.1f} km/h en la tarde."
+        )
+
+    # Diferencia entre niveles
+    if diff_niveles > 4:
+        partes.append(
+            f"Se observa una diferencia notable entre niveles, con velocidades {diff_niveles:.1f} km/h "
+            f"más altas a 100 metros de altura, lo cual es característico del perfil vertical del viento."
+        )
+
+    return " ".join(partes)
+
+
+# ---------------------------------------------------------
+# FUNCIÓN PRINCIPAL: generar boletín
+# ---------------------------------------------------------
+def generar_boletin():
+
+    # Verificar archivos necesarios
+    for ruta, nombre in [(csv_path, "CSV de pronóstico"), (plantilla, "plantilla .docx")]:
+        if not os.path.exists(ruta):
+            raise FileNotFoundError(f"No se encontró {nombre} en: {ruta}")
+
+    # Leer datos
+    print("📊 Leyendo datos de pronóstico...")
+    df = leer_datos(csv_path)
+    df['date_only'] = df['date'].dt.date
+    df['Hora']      = df['date'].dt.hour
+
+    fechas_unicas = sorted(df['date_only'].unique())
+    n_dias = min(3, len(fechas_unicas))
+    fechas = [datetime.combine(d, datetime.min.time()) for d in fechas_unicas[:n_dias]]
+
+    if not fechas:
+        raise RuntimeError("No hay datos de pronóstico disponibles.")
+
+    fecha_inicio = fechas[0]
+    correlativo  = f"BO{fecha_inicio.strftime('%d%m%y')}"
+    print(f"📅 Correlativo: {correlativo} | Días: {n_dias}")
+
+    # Abrir plantilla
+    print("📄 Cargando plantilla...")
+    doc = Document(plantilla)
+
+    # Limpiar el párrafo vacío que trae la plantilla
+    for p in doc.paragraphs:
+        p.clear()
+
+    def add_para(texto_bold=None, texto_normal=None, size_pt=None, space_after=6):
+        p = doc.add_paragraph()
+        if texto_bold:
+            r = p.add_run(texto_bold)
+            r.bold = True
+            if size_pt:
+                r.font.size = Pt(size_pt)
+        if texto_normal:
+            r2 = p.add_run(texto_normal)
+            r2.bold = False
+        p.paragraph_format.space_after  = Pt(space_after)
+        p.paragraph_format.space_before = Pt(0)
+        return p
+
+    # ---- ENCABEZADO ----
+    add_para(texto_bold=f"Correlativo {correlativo}", space_after=4)
+    add_para(texto_bold="ICC: CeH y SSP", space_after=4)
+    add_para(
+        texto_bold="Condiciones de viento proyectadas para las zonas buffer prioritaria",
+        size_pt=14, space_after=6
+    )
+
+    # Fechas del pronóstico
+    dia1, dia2, dia3 = fechas[0], fechas[1] if n_dias>1 else fechas[0], fechas[2] if n_dias>2 else fechas[0]
+    if n_dias == 3:
+        texto_fechas = (
+            f"Pronósticos de horarios indicados para el {dia1.day}, {dia2.day} de {mes_es(dia1)} "
+            f"y {dia3.day} de {mes_es(dia3)} {dia1.year}."
+        )
+    elif n_dias == 2:
+        texto_fechas = (
+            f"Pronósticos de horarios indicados para el {dia1.day} y {dia2.day} de "
+            f"{mes_es(dia1)} {dia1.year}."
+        )
+    else:
+        texto_fechas = f"Pronóstico de horarios indicados para el {dia1.day} de {mes_es(dia1)} {dia1.year}."
+
+    add_para(texto_normal=texto_fechas, space_after=10)
+
+    # ---- INTERPRETACIÓN GENERAL ----
+    p = doc.add_paragraph()
+    p.add_run("Interpretación: ").bold = True
+    p.add_run(
+        "Para facilitar el análisis, la gráfica utiliza un sistema de colores: las áreas en rosado "
+        "representan condiciones no favorables (no aptas para realizar la quema), mientras que las "
+        "franjas en verde indican periodos favorables para la operación.\n"
+        "Cada línea de color en el gráfico corresponde a una fecha específica del calendario. "
+        "En la línea horizontal, se detallan las horas del día (de 0 a 23:59), donde cada cuadrícula "
+        "representa un intervalo de 2 horas."
+    )
+    p.paragraph_format.space_after = Pt(6)
+
+    p2 = doc.add_paragraph()
+    p2.add_run("• Zonas no favorables (franjas rosadas): ").bold = True
+    p2.add_run(
+        "Representan los horarios donde el viento sopla predominantemente hacia el Sur "
+        "(entre los 0° y 90°, y de 270° a 360°)."
+    )
+    p2.paragraph_format.space_after = Pt(4)
+
+    p3 = doc.add_paragraph()
+    p3.add_run("• Zonas favorables (franja verde): ").bold = True
+    p3.add_run(
+        "Corresponden a los momentos en que el viento mantiene una dirección hacia el Norte "
+        "(entre los 90° y 270°). Estas condiciones son las adecuadas para realizar la actividad "
+        "de quemas ya que se espera un desplazamiento de la pavesa al norte."
+    )
+    p3.paragraph_format.space_after = Pt(4)
+
+    p4 = doc.add_paragraph()
+    p4.add_run("Líneas de colores: ").bold = True
+    p4.add_run("Significan una fecha en el calendario.")
+    p4.paragraph_format.space_after = Pt(12)
+
+    # ---- GRÁFICAS ----
+    run_date_str = fecha_inicio.strftime("%Y%m%d")
+
+    graficas_config = [
+        ("Serie_ciclo_diario_wind_direction_10m",  "Dirección del viento a 10 metros"),
+        ("Serie_ciclo_diario_wind_direction_100m", "Dirección del viento a 100 metros"),
+        ("Serie_ciclo_diario_wind_speed_10m",      "Velocidad del viento a 10 metros"),
+        ("Serie_ciclo_diario_wind_speed_100m",     "Velocidad del viento a 100 metros"),
+    ]
+
+    # Buscar imágenes en carpeta de fecha o raíz de results
+    carpeta_fecha = os.path.join(results_dir, run_date_str)
+    carpeta_buscar = carpeta_fecha if os.path.isdir(carpeta_fecha) else results_dir
+
+    print("\n🖼️  Insertando gráficas...")
+    for prefijo, titulo_grafica in graficas_config:
+        # Buscar archivo
+        ruta_img = None
+        for archivo in os.listdir(carpeta_buscar):
+            if prefijo in archivo and archivo.endswith(".png"):
+                ruta_img = os.path.join(carpeta_buscar, archivo)
+                break
+
+        p_tit = doc.add_paragraph()
+        r_tit = p_tit.add_run(titulo_grafica)
+        r_tit.bold = True
+        r_tit.font.size = Pt(11)
+        p_tit.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p_tit.paragraph_format.space_before = Pt(6)
+        p_tit.paragraph_format.space_after  = Pt(4)
+
+        if ruta_img:
+            doc.add_picture(ruta_img, width=Inches(6.0))
+            print(f"   ✅ {titulo_grafica}")
+        else:
+            p_err = doc.add_paragraph()
+            p_err.add_run(f"[Gráfica no disponible: {prefijo}]").italic = True
+            print(f"   ⚠️  No encontrada: {prefijo}")
+
+        doc.add_paragraph().paragraph_format.space_after = Pt(8)
+
+    # ---- ANÁLISIS DE DIRECCIÓN ----
+    print("\n📋 Generando análisis de dirección...")
+    p_dir_tit = doc.add_paragraph()
+    p_dir_tit.add_run("Dirección del viento").bold = True
+    p_dir_tit.runs[0].font.size = Pt(13)
+    p_dir_tit.paragraph_format.space_before = Pt(12)
+    p_dir_tit.paragraph_format.space_after  = Pt(8)
+
+    for fecha in fechas:
+        df_dia = df[df['date_only'] == fecha.date()].copy()
+        if df_dia.empty:
+            continue
+
+        texto = analizar_direccion(df_dia, dia_es(fecha), fecha.day, mes_es(fecha))
+
+        p = doc.add_paragraph()
+        p.add_run(f"{dia_es(fecha).capitalize()} {fecha.day} de {mes_es(fecha)}: ").bold = True
+        p.add_run(texto)
+        p.paragraph_format.space_after = Pt(10)
+        print(f"   ✅ Dirección: {dia_es(fecha)} {fecha.day}")
+
+    # ---- ANÁLISIS DE VELOCIDAD ----
+    print("\n🌬️  Generando análisis de velocidad...")
+    p_vel_tit = doc.add_paragraph()
+    p_vel_tit.add_run("Velocidad del viento").bold = True
+    p_vel_tit.runs[0].font.size = Pt(13)
+    p_vel_tit.paragraph_format.space_before = Pt(12)
+    p_vel_tit.paragraph_format.space_after  = Pt(8)
+
+    for fecha in fechas:
+        df_dia = df[df['date_only'] == fecha.date()].copy()
+        if df_dia.empty:
+            continue
+
+        texto = analizar_velocidad(df_dia, dia_es(fecha), fecha.day, mes_es(fecha))
+
+        p = doc.add_paragraph()
+        p.add_run(f"{dia_es(fecha).capitalize()} {fecha.day} de {mes_es(fecha)}: ").bold = True
+        p.add_run(texto)
+        p.paragraph_format.space_after = Pt(10)
+        print(f"   ✅ Velocidad: {dia_es(fecha)} {fecha.day}")
+
+    # ---- GUARDAR ----
+    os.makedirs(carpeta_fecha, exist_ok=True)
+    nombre_archivo = f"Boletin_Sipacate_{correlativo}.docx"
+    ruta_salida    = os.path.join(carpeta_fecha, nombre_archivo)
+    # También copia latest en raíz de results para fácil acceso
+    ruta_latest    = os.path.join(results_dir, "Boletin_latest.docx")
+
+    doc.save(ruta_salida)
+    shutil.copy2(ruta_salida, ruta_latest)
+
+    print(f"\n{'='*55}")
+    print(f"✅ BOLETÍN GENERADO: {nombre_archivo}")
+    print(f"   Carpeta fecha : {ruta_salida}")
+    print(f"   Latest        : {ruta_latest}")
+    print(f"{'='*55}\n")
+
+    return ruta_salida
+
+
+# ---- EJECUCIÓN ----
+if __name__ == "__main__":
+    generar_boletin()
