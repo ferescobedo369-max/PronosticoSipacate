@@ -1,8 +1,10 @@
 """
 Script 1: Extracción de datos meteorológicos y cálculo de estadísticas de área.
-- Descarga datos horarios de Open-Meteo (ECMWF IFS) para múltiples puntos dentro del polígono.
-- Calcula velocidad a 200m usando Ley de Potencia (alpha dinámico desde 10m y 100m).
-- Guarda CSV con promedios y medianas en carpeta YYYYMMDD.
+- Descarga datos horarios de Open-Meteo (ECMWF IFS).
+- Calcula velocidad a 200m usando Ley de Potencia (alpha dinámico).
+- Guarda DOS CSVs:
+    1. Area_forecast_latest.csv              → compatible con Power BI (misma estructura que antes)
+    2. Area_forecast_mean_median_YYYYMMDD.csv → historial completo con mean/median
 """
 
 import os
@@ -70,7 +72,9 @@ openmeteo = openmeteo_requests.Client(session=retry_session)
 
 url = "https://api.open-meteo.com/v1/forecast"
 
-# Variables nativas a solicitar (SIN 200m — se calcula por Ley de Potencia)
+ALPHA_DEFAULT = 0.143
+
+# Variables nativas (sin 200m — se calcula por Ley de Potencia)
 hourly_vars = [
     "temperature_2m",
     "wind_speed_10m",
@@ -80,8 +84,6 @@ hourly_vars = [
     "wind_gusts_10m",
     "rain"
 ]
-
-ALPHA_DEFAULT = 0.143  # Coeficiente de Hellmann estándar para terreno neutro
 
 # ---------------------------------------------------------
 # Descarga de datos por punto
@@ -102,7 +104,6 @@ for (lat, lon) in points:
     responses = openmeteo.weather_api(url, params=params)
     response = responses[0]
     hourly = response.Hourly()
-
     vals = [hourly.Variables(i).ValuesAsNumpy() for i in range(len(hourly_vars))]
 
     date_index = pd.date_range(
@@ -119,56 +120,77 @@ for (lat, lon) in points:
     df_point = pd.DataFrame(data)
 
     # ---------------------------------------------------------
-    # Ley de Potencia del Viento → velocidad a 200m
-    # v200 = v100 * (200/100)^alpha
-    # alpha = ln(v100/v10) / ln(100/10)  [dinámico por hora]
+    # Ley de Potencia → velocidad a 200m
     # ---------------------------------------------------------
     v10  = df_point["wind_speed_10m"].values.copy()
     v100 = df_point["wind_speed_100m"].values.copy()
 
     alpha = np.full(len(v10), ALPHA_DEFAULT, dtype=float)
-
-    # Calcular alpha dinámico donde ambas velocidades sean > 0.5 km/h
     valid = (v10 > 0.5) & (v100 > 0.5)
     ratio = np.where(valid, v100 / v10, np.nan)
     with np.errstate(divide='ignore', invalid='ignore'):
         alpha_dyn = np.log(ratio) / np.log(100.0 / 10.0)
 
-    # Aplicar alpha dinámico solo donde es físicamente razonable (0 < alpha < 0.6)
     ok = valid & np.isfinite(alpha_dyn) & (alpha_dyn > 0) & (alpha_dyn < 0.6)
     alpha[ok] = alpha_dyn[ok]
 
-    v200 = v100 * (200.0 / 100.0) ** alpha
-    df_point["wind_speed_200m"]    = v200
-    df_point["wind_direction_200m"] = df_point["wind_direction_100m"]  # misma dirección que 100m
-    df_point["alpha_shear"]        = alpha  # guardamos alpha para diagnóstico
+    df_point["wind_speed_200m"]     = v100 * (200.0 / 100.0) ** alpha
+    df_point["wind_direction_200m"] = df_point["wind_direction_100m"]
+    df_point["alpha_shear"]         = alpha
 
     all_dfs.append(df_point)
 
 df_all = pd.concat(all_dfs, ignore_index=True)
 
-# ---------------------------------------------------------
-# Estadísticas de área: media y mediana por hora
-# ---------------------------------------------------------
+# =============================================================
+# CSV 1: Area_forecast_latest.csv
+# Estructura IDÉNTICA a la que Power BI ya conoce:
+#   date, wind_speed_10m, wind_speed_100m, wind_speed_200m,
+#   wind_direction_10m, wind_direction_100m, wind_direction_200m,
+#   wind_gusts_10m, Zona_Favorable, Dia, Hora
+# =============================================================
+
+powerbi_cols = [
+    "wind_speed_10m",
+    "wind_speed_100m",
+    "wind_speed_200m",
+    "wind_direction_10m",
+    "wind_direction_100m",
+    "wind_direction_200m",
+    "wind_gusts_10m",
+]
+
+# Promedio de área por hora (igual que hacía el script original de Power BI)
+df_powerbi = df_all.groupby("date")[powerbi_cols].mean().reset_index()
+
+# Columna Zona_Favorable (idéntica a tu script original)
+df_powerbi["Zona_Favorable"] = df_powerbi["wind_direction_10m"].apply(
+    lambda x: "Favorable" if 90 <= x <= 270 else "No Favorable"
+)
+
+# Columnas Dia y Hora separadas para facilitar filtros en Power BI
+df_powerbi["Dia"]  = df_powerbi["date"].dt.strftime("%d-%m-%Y")
+df_powerbi["Hora"] = df_powerbi["date"].dt.hour
+
+# Guardar — siempre sobreescribe (Power BI apunta aquí)
+latest_file = os.path.join(results_dir, "Area_forecast_latest.csv")
+df_powerbi.to_csv(latest_file, index=False, encoding="utf-8")
+print(f"✓ CSV Power BI guardado : {latest_file}")
+
+# =============================================================
+# CSV 2: Historial con mean/median en carpeta YYYYMMDD
+# =============================================================
 all_cols = hourly_vars + ["wind_speed_200m", "wind_direction_200m", "alpha_shear"]
 
 agg = df_all.groupby("date")[all_cols].agg(["mean", "median"]).reset_index()
 agg.columns = ["date"] + [f"{var}_{stat}" for var in all_cols for stat in ["mean", "median"]]
 
-# ---------------------------------------------------------
-# Guardar CSV en carpeta YYYYMMDD
-# ---------------------------------------------------------
 run_date_str = pd.Timestamp.now(tz="America/Guatemala").strftime("%Y%m%d")
 daily_folder = os.path.join(results_dir, run_date_str)
 os.makedirs(daily_folder, exist_ok=True)
 
-output_file = os.path.join(daily_folder, f"Area_forecast_mean_median_{run_date_str}.csv")
-agg.to_csv(output_file, index=False, encoding="utf-8")
+hist_file = os.path.join(daily_folder, f"Area_forecast_mean_median_{run_date_str}.csv")
+agg.to_csv(hist_file, index=False, encoding="utf-8")
+print(f"✓ CSV historial guardado : {hist_file}")
 
-# También guardar copia "latest" para Power BI u otras herramientas
-latest_file = os.path.join(results_dir, "Area_forecast_latest.csv")
-agg.to_csv(latest_file, index=False, encoding="utf-8")
-
-print(f"\nDatos guardados en:")
-print(f"  Por fecha : {output_file}")
-print(f"  Latest    : {latest_file}")
+print("\n✓ Proceso completado.")
