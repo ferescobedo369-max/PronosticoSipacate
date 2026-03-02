@@ -22,13 +22,12 @@ from datetime import datetime
 # ---------------------------------------------------------
 base_dir    = os.path.dirname(os.path.abspath(__file__))
 results_dir = os.path.join(base_dir, "2_Results")
-# Buscar plantilla en ubicaciones posibles
+
 def _encontrar_plantilla(base_dir):
     candidatos = [
         os.path.join(base_dir, "0_Archivos_Recibidos", "plantilla_de_boletin.docx"),
         os.path.join(base_dir, "plantilla_de_boletin.docx"),
     ]
-    # Búsqueda recursiva por si está en subcarpeta
     for root, dirs, files in os.walk(base_dir):
         for f in files:
             if f.lower() == "plantilla_de_boletin.docx":
@@ -43,7 +42,7 @@ def _encontrar_plantilla(base_dir):
     )
 
 plantilla = _encontrar_plantilla(base_dir)
-csv_path    = os.path.join(results_dir, "Area_forecast_latest.csv")
+csv_path  = os.path.join(results_dir, "Area_forecast_latest.csv")
 
 # ---------------------------------------------------------
 # Helpers fechas en español
@@ -87,7 +86,6 @@ def analizar_direccion(df_dia):
     favorable_mask = np.array([es_favorable(d) for d in dir_10m])
     horas_nofav    = horas[~favorable_mask]
 
-    # Bloque favorable principal
     max_bloque, bloque_actual = 0, 0
     inicio_fav, fin_fav, inicio_actual = None, None, None
 
@@ -210,10 +208,6 @@ def analizar_velocidad(df_dia):
 # CONVERTIR DOCX → PDF con LibreOffice
 # ---------------------------------------------------------
 def convertir_a_pdf(docx_path, output_dir):
-    """
-    Usa LibreOffice headless para convertir .docx a .pdf
-    Disponible por defecto en ubuntu-latest de GitHub Actions
-    """
     print("🔄 Convirtiendo Word → PDF con LibreOffice...")
     resultado = subprocess.run(
         ["libreoffice", "--headless", "--convert-to", "pdf",
@@ -225,7 +219,6 @@ def convertir_a_pdf(docx_path, output_dir):
         print(f"⚠️  stderr: {resultado.stderr}")
         raise RuntimeError(f"LibreOffice falló al convertir: {resultado.stderr}")
 
-    # LibreOffice nombra el PDF igual que el docx pero con .pdf
     nombre_pdf = os.path.splitext(os.path.basename(docx_path))[0] + ".pdf"
     pdf_path   = os.path.join(output_dir, nombre_pdf)
 
@@ -234,6 +227,12 @@ def convertir_a_pdf(docx_path, output_dir):
 
     print(f"✅ PDF generado: {pdf_path}")
     return pdf_path
+
+# ---------------------------------------------------------
+# Helper: párrafo justificado
+# ---------------------------------------------------------
+def set_justify(p):
+    p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
 
 # ---------------------------------------------------------
 # FUNCIÓN PRINCIPAL
@@ -254,9 +253,9 @@ def generar_boletin():
     if not fechas:
         raise RuntimeError("No hay datos disponibles.")
 
-    fecha_inicio = fechas[0]
-    correlativo  = f"BO{fecha_inicio.strftime('%d%m%y')}"
-    run_date_str = fecha_inicio.strftime("%Y%m%d")
+    fecha_inicio  = fechas[0]
+    correlativo   = f"BO{fecha_inicio.strftime('%d%m%y')}"
+    run_date_str  = fecha_inicio.strftime("%Y%m%d")
     carpeta_fecha = os.path.join(results_dir, run_date_str)
     os.makedirs(carpeta_fecha, exist_ok=True)
 
@@ -267,29 +266,22 @@ def generar_boletin():
     for p in doc.paragraphs:
         p.clear()
 
-    def add_para(bold=None, normal=None, size_pt=None, space_after=6, space_before=0,
-                 justify=True):
-        p = doc.add_paragraph()
-        if bold:
-            r = p.add_run(bold)
-            r.bold = True
-            if size_pt:
-                r.font.size = Pt(size_pt)
-        if normal:
-            r2 = p.add_run(normal)
-            r2.bold = False
-        p.paragraph_format.space_after  = Pt(space_after)
-        p.paragraph_format.space_before = Pt(space_before)
-        if justify:
-            p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-        return p
-
     # ---- Encabezado ----
-    add_para(bold=f"Correlativo {correlativo}", space_after=4)
-    add_para(bold="ICC: CeH y SSP", space_after=4)
-    add_para(bold="Condiciones de viento proyectadas para las zonas buffer prioritaria",
-             size_pt=14, space_after=6)
+    p = doc.add_paragraph()
+    p.add_run(f"Correlativo {correlativo}").bold = True
+    p.paragraph_format.space_after = Pt(4)
 
+    p = doc.add_paragraph()
+    p.add_run("ICC: CeH y SSP").bold = True
+    p.paragraph_format.space_after = Pt(4)
+
+    p = doc.add_paragraph()
+    r = p.add_run("Condiciones de viento proyectadas para las zonas buffer prioritaria")
+    r.bold = True
+    r.font.size = Pt(14)
+    p.paragraph_format.space_after = Pt(6)
+
+    # Fechas del pronóstico
     dia1 = fechas[0]
     dia2 = fechas[1] if n_dias > 1 else fechas[0]
     dia3 = fechas[2] if n_dias > 2 else fechas[0]
@@ -307,11 +299,13 @@ def generar_boletin():
     else:
         texto_fechas = f"Pronóstico para el {dia1.day} de {mes_es(dia1)} {dia1.year}."
 
-    add_para(normal=texto_fechas, space_after=10)
+    p = doc.add_paragraph()
+    p.add_run(texto_fechas)
+    set_justify(p)
+    p.paragraph_format.space_after = Pt(10)
 
     # ---- Interpretación general ----
     p = doc.add_paragraph()
-    p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     p.add_run("Interpretación: ").bold = True
     p.add_run(
         "Para facilitar el análisis, la gráfica utiliza un sistema de colores: las áreas en rosado "
@@ -321,34 +315,35 @@ def generar_boletin():
         "En la línea horizontal, se detallan las horas del día (de 0 a 23:59), donde cada cuadrícula "
         "representa un intervalo de 2 horas."
     )
+    set_justify(p)
     p.paragraph_format.space_after = Pt(6)
 
-    p2 = doc.add_paragraph()
-    p2.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-    p2.add_run("• Zonas no favorables (franjas rosadas): ").bold = True
-    p2.add_run(
+    p = doc.add_paragraph()
+    p.add_run("• Zonas no favorables (franjas rosadas): ").bold = True
+    p.add_run(
         "Representan los horarios donde el viento sopla predominantemente hacia el Sur "
         "(entre los 0° y 90°, y de 270° a 360°)."
     )
-    p2.paragraph_format.space_after = Pt(4)
+    set_justify(p)
+    p.paragraph_format.space_after = Pt(4)
 
-    p3 = doc.add_paragraph()
-    p3.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-    p3.add_run("• Zonas favorables (franja verde): ").bold = True
-    p3.add_run(
+    p = doc.add_paragraph()
+    p.add_run("• Zonas favorables (franja verde): ").bold = True
+    p.add_run(
         "Corresponden a los momentos en que el viento mantiene una dirección hacia el Norte "
         "(entre los 90° y 270°). Estas condiciones son las adecuadas para realizar la actividad "
         "de quemas ya que se espera un desplazamiento de la pavesa al norte."
     )
-    p3.paragraph_format.space_after = Pt(4)
+    set_justify(p)
+    p.paragraph_format.space_after = Pt(4)
 
-    p4 = doc.add_paragraph()
-    p4.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-    p4.add_run("Líneas de colores: ").bold = True
-    p4.add_run("Significan una fecha en el calendario.")
-    p4.paragraph_format.space_after = Pt(12)
+    p = doc.add_paragraph()
+    p.add_run("Líneas de colores: ").bold = True
+    p.add_run("Significan una fecha en el calendario.")
+    set_justify(p)
+    p.paragraph_format.space_after = Pt(12)
 
-    # ---- Gráficas ----
+    # ---- Gráficas (una por una, igual que antes) ----
     graficas_config = [
         ("Serie_ciclo_diario_wind_direction_10m",  "Dirección del viento a 10 metros"),
         ("Serie_ciclo_diario_wind_direction_100m", "Dirección del viento a 100 metros"),
@@ -358,66 +353,38 @@ def generar_boletin():
 
     carpeta_imgs = carpeta_fecha if os.path.isdir(carpeta_fecha) else results_dir
 
-    print("\n🖼️  Insertando gráficas (2 por página)...")
-
-    # Resolver rutas de imágenes
-    rutas_imgs = []
-    for prefijo, titulo in graficas_config:
+    print("\n🖼️  Insertando gráficas...")
+    for prefijo, titulo_grafica in graficas_config:
         ruta_img = None
         for archivo in os.listdir(carpeta_imgs):
             if prefijo in archivo and archivo.endswith(".png"):
                 ruta_img = os.path.join(carpeta_imgs, archivo)
                 break
-        rutas_imgs.append((titulo, ruta_img))
 
-    # Insertar de 2 en 2 por página
-    from docx.oxml.ns import qn
-    from docx.oxml import OxmlElement
-
-    def add_page_break(doc):
-        p = doc.add_paragraph()
-        run = p.add_run()
-        br = OxmlElement("w:br")
-        br.set(qn("w:type"), "page")
-        run._r.append(br)
-        return p
-
-    for i, (titulo_grafica, ruta_img) in enumerate(rutas_imgs):
-        # Título centrado y en negrita
         p_tit = doc.add_paragraph()
         r = p_tit.add_run(titulo_grafica)
         r.bold = True
         r.font.size = Pt(11)
         p_tit.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        p_tit.paragraph_format.space_before = Pt(4)
+        p_tit.paragraph_format.space_before = Pt(6)
         p_tit.paragraph_format.space_after  = Pt(4)
 
-        # Imagen
         if ruta_img:
-            p_img = doc.add_paragraph()
-            p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run_img = p_img.add_run()
-            run_img.add_picture(ruta_img, width=Inches(5.8))
+            doc.add_picture(ruta_img, width=Inches(6.0))
             print(f"   ✅ {titulo_grafica}")
         else:
-            doc.add_paragraph(f"[Gráfica no disponible: {titulo_grafica}]")
-            print(f"   ⚠️  No encontrada: {titulo_grafica}")
+            doc.add_paragraph(f"[Gráfica no disponible: {prefijo}]")
+            print(f"   ⚠️  No encontrada: {prefijo}")
 
-        # Cada 2 imágenes (índice impar) insertar salto de página
-        # excepto después de la última imagen
-        if i % 2 == 1 and i < len(rutas_imgs) - 1:
-            add_page_break(doc)
-        elif i % 2 == 0 and i < len(rutas_imgs) - 1:
-            # Separador entre las dos imágenes de la misma página
-            doc.add_paragraph().paragraph_format.space_after = Pt(6)
+        doc.add_paragraph().paragraph_format.space_after = Pt(8)
 
     # ---- Análisis dirección ----
     print("\n📋 Análisis de dirección...")
-    p_tit = doc.add_paragraph()
-    p_tit.add_run("Dirección del viento").bold = True
-    p_tit.runs[0].font.size = Pt(13)
-    p_tit.paragraph_format.space_before = Pt(12)
-    p_tit.paragraph_format.space_after  = Pt(8)
+    p = doc.add_paragraph()
+    p.add_run("Dirección del viento").bold = True
+    p.runs[0].font.size = Pt(13)
+    p.paragraph_format.space_before = Pt(12)
+    p.paragraph_format.space_after  = Pt(8)
 
     for fecha in fechas:
         df_dia = df[df['date_only'] == fecha.date()].copy()
@@ -425,19 +392,19 @@ def generar_boletin():
             continue
         texto = analizar_direccion(df_dia)
         p = doc.add_paragraph()
-        p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
         p.add_run(f"{dia_es(fecha).capitalize()} {fecha.day} de {mes_es(fecha)}: ").bold = True
         p.add_run(texto)
+        set_justify(p)
         p.paragraph_format.space_after = Pt(10)
         print(f"   ✅ {dia_es(fecha)} {fecha.day}")
 
     # ---- Análisis velocidad ----
     print("\n🌬️  Análisis de velocidad...")
-    p_tit2 = doc.add_paragraph()
-    p_tit2.add_run("Velocidad del viento").bold = True
-    p_tit2.runs[0].font.size = Pt(13)
-    p_tit2.paragraph_format.space_before = Pt(12)
-    p_tit2.paragraph_format.space_after  = Pt(8)
+    p = doc.add_paragraph()
+    p.add_run("Velocidad del viento").bold = True
+    p.runs[0].font.size = Pt(13)
+    p.paragraph_format.space_before = Pt(12)
+    p.paragraph_format.space_after  = Pt(8)
 
     for fecha in fechas:
         df_dia = df[df['date_only'] == fecha.date()].copy()
@@ -445,9 +412,9 @@ def generar_boletin():
             continue
         texto = analizar_velocidad(df_dia)
         p = doc.add_paragraph()
-        p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
         p.add_run(f"{dia_es(fecha).capitalize()} {fecha.day} de {mes_es(fecha)}: ").bold = True
         p.add_run(texto)
+        set_justify(p)
         p.paragraph_format.space_after = Pt(10)
         print(f"   ✅ {dia_es(fecha)} {fecha.day}")
 
@@ -458,8 +425,8 @@ def generar_boletin():
     print(f"\n📄 Word guardado: {ruta_docx}")
 
     # ---- Convertir a PDF ----
-    pdf_path    = convertir_a_pdf(ruta_docx, carpeta_fecha)
-    latest_pdf  = os.path.join(results_dir, "Boletin_latest.pdf")
+    pdf_path   = convertir_a_pdf(ruta_docx, carpeta_fecha)
+    latest_pdf = os.path.join(results_dir, "Boletin_latest.pdf")
     shutil.copy2(pdf_path, latest_pdf)
     print(f"📎 PDF latest: {latest_pdf}")
 
