@@ -24,7 +24,9 @@ jobs:
       - name: Instalar dependencias del sistema
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y libgdal-dev gdal-bin libspatialindex-dev
+          sudo apt-get install -y \
+            libgdal-dev gdal-bin libspatialindex-dev \
+            libreoffice --no-install-recommends
 
       - name: Instalar librerias Python
         run: |
@@ -37,7 +39,7 @@ jobs:
       - name: Generar mapas y graficas
         run: python 3_Map_200.py
 
-      - name: Generar boletin Word
+      - name: Generar boletin PDF
         run: python 4_Generar_Boletin.py
 
       - name: Enviar boletin por correo
