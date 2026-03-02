@@ -53,6 +53,7 @@ jobs:
         run: |
           git config --global user.name 'actions-user'
           git config --global user.email 'action@github.com'
-          git add 2_Results/
+           git add 2_Results/
           git diff --staged --quiet || git commit -m "Actualizacion automatica - $(TZ='America/Guatemala' date +'%Y-%m-%d %H:%M') hora Guatemala"
+          git pull --rebase origin main
           git push
