@@ -3,7 +3,7 @@ name: Actualizacion Pronostico Sipacate
 on:
   schedule:
     # 7:00 AM Guatemala = 13:00 UTC
-    - cron: '0 13 * * *'
+   - cron: '45 16 * * *'
   workflow_dispatch:
 
 jobs:
