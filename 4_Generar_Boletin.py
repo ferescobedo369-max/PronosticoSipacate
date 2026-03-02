@@ -267,7 +267,8 @@ def generar_boletin():
     for p in doc.paragraphs:
         p.clear()
 
-    def add_para(bold=None, normal=None, size_pt=None, space_after=6, space_before=0):
+    def add_para(bold=None, normal=None, size_pt=None, space_after=6, space_before=0,
+                 justify=True):
         p = doc.add_paragraph()
         if bold:
             r = p.add_run(bold)
@@ -279,6 +280,8 @@ def generar_boletin():
             r2.bold = False
         p.paragraph_format.space_after  = Pt(space_after)
         p.paragraph_format.space_before = Pt(space_before)
+        if justify:
+            p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
         return p
 
     # ---- Encabezado ----
@@ -308,6 +311,7 @@ def generar_boletin():
 
     # ---- Interpretación general ----
     p = doc.add_paragraph()
+    p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     p.add_run("Interpretación: ").bold = True
     p.add_run(
         "Para facilitar el análisis, la gráfica utiliza un sistema de colores: las áreas en rosado "
@@ -320,6 +324,7 @@ def generar_boletin():
     p.paragraph_format.space_after = Pt(6)
 
     p2 = doc.add_paragraph()
+    p2.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     p2.add_run("• Zonas no favorables (franjas rosadas): ").bold = True
     p2.add_run(
         "Representan los horarios donde el viento sopla predominantemente hacia el Sur "
@@ -328,6 +333,7 @@ def generar_boletin():
     p2.paragraph_format.space_after = Pt(4)
 
     p3 = doc.add_paragraph()
+    p3.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     p3.add_run("• Zonas favorables (franja verde): ").bold = True
     p3.add_run(
         "Corresponden a los momentos en que el viento mantiene una dirección hacia el Norte "
@@ -337,6 +343,7 @@ def generar_boletin():
     p3.paragraph_format.space_after = Pt(4)
 
     p4 = doc.add_paragraph()
+    p4.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     p4.add_run("Líneas de colores: ").bold = True
     p4.add_run("Significan una fecha en el calendario.")
     p4.paragraph_format.space_after = Pt(12)
@@ -351,30 +358,58 @@ def generar_boletin():
 
     carpeta_imgs = carpeta_fecha if os.path.isdir(carpeta_fecha) else results_dir
 
-    print("\n🖼️  Insertando gráficas...")
-    for prefijo, titulo_grafica in graficas_config:
+    print("\n🖼️  Insertando gráficas (2 por página)...")
+
+    # Resolver rutas de imágenes
+    rutas_imgs = []
+    for prefijo, titulo in graficas_config:
         ruta_img = None
         for archivo in os.listdir(carpeta_imgs):
             if prefijo in archivo and archivo.endswith(".png"):
                 ruta_img = os.path.join(carpeta_imgs, archivo)
                 break
+        rutas_imgs.append((titulo, ruta_img))
 
+    # Insertar de 2 en 2 por página
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+
+    def add_page_break(doc):
+        p = doc.add_paragraph()
+        run = p.add_run()
+        br = OxmlElement("w:br")
+        br.set(qn("w:type"), "page")
+        run._r.append(br)
+        return p
+
+    for i, (titulo_grafica, ruta_img) in enumerate(rutas_imgs):
+        # Título centrado y en negrita
         p_tit = doc.add_paragraph()
         r = p_tit.add_run(titulo_grafica)
         r.bold = True
         r.font.size = Pt(11)
         p_tit.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        p_tit.paragraph_format.space_before = Pt(6)
+        p_tit.paragraph_format.space_before = Pt(4)
         p_tit.paragraph_format.space_after  = Pt(4)
 
+        # Imagen
         if ruta_img:
-            doc.add_picture(ruta_img, width=Inches(6.0))
+            p_img = doc.add_paragraph()
+            p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run_img = p_img.add_run()
+            run_img.add_picture(ruta_img, width=Inches(5.8))
             print(f"   ✅ {titulo_grafica}")
         else:
-            doc.add_paragraph(f"[Gráfica no disponible: {prefijo}]")
-            print(f"   ⚠️  No encontrada: {prefijo}")
+            doc.add_paragraph(f"[Gráfica no disponible: {titulo_grafica}]")
+            print(f"   ⚠️  No encontrada: {titulo_grafica}")
 
-        doc.add_paragraph().paragraph_format.space_after = Pt(8)
+        # Cada 2 imágenes (índice impar) insertar salto de página
+        # excepto después de la última imagen
+        if i % 2 == 1 and i < len(rutas_imgs) - 1:
+            add_page_break(doc)
+        elif i % 2 == 0 and i < len(rutas_imgs) - 1:
+            # Separador entre las dos imágenes de la misma página
+            doc.add_paragraph().paragraph_format.space_after = Pt(6)
 
     # ---- Análisis dirección ----
     print("\n📋 Análisis de dirección...")
@@ -390,6 +425,7 @@ def generar_boletin():
             continue
         texto = analizar_direccion(df_dia)
         p = doc.add_paragraph()
+        p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
         p.add_run(f"{dia_es(fecha).capitalize()} {fecha.day} de {mes_es(fecha)}: ").bold = True
         p.add_run(texto)
         p.paragraph_format.space_after = Pt(10)
@@ -409,6 +445,7 @@ def generar_boletin():
             continue
         texto = analizar_velocidad(df_dia)
         p = doc.add_paragraph()
+        p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
         p.add_run(f"{dia_es(fecha).capitalize()} {fecha.day} de {mes_es(fecha)}: ").bold = True
         p.add_run(texto)
         p.paragraph_format.space_after = Pt(10)
