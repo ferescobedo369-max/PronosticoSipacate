@@ -22,7 +22,27 @@ from datetime import datetime
 # ---------------------------------------------------------
 base_dir    = os.path.dirname(os.path.abspath(__file__))
 results_dir = os.path.join(base_dir, "2_Results")
-plantilla   = os.path.join(base_dir, "0_Archivos_Recibidos", "plantilla_de_boletin.docx")
+# Buscar plantilla en ubicaciones posibles
+def _encontrar_plantilla(base_dir):
+    candidatos = [
+        os.path.join(base_dir, "0_Archivos_Recibidos", "plantilla_de_boletin.docx"),
+        os.path.join(base_dir, "plantilla_de_boletin.docx"),
+    ]
+    # Búsqueda recursiva por si está en subcarpeta
+    for root, dirs, files in os.walk(base_dir):
+        for f in files:
+            if f.lower() == "plantilla_de_boletin.docx":
+                candidatos.insert(0, os.path.join(root, f))
+    for c in candidatos:
+        if os.path.exists(c):
+            print(f"✅ Plantilla encontrada en: {c}")
+            return c
+    raise FileNotFoundError(
+        f"No se encontró plantilla_de_boletin.docx en el repo.\n"
+        f"Rutas buscadas:\n" + "\n".join(candidatos)
+    )
+
+plantilla = _encontrar_plantilla(base_dir)
 csv_path    = os.path.join(results_dir, "Area_forecast_latest.csv")
 
 # ---------------------------------------------------------
@@ -220,9 +240,8 @@ def convertir_a_pdf(docx_path, output_dir):
 # ---------------------------------------------------------
 def generar_boletin():
 
-    for ruta, nombre in [(csv_path, "CSV de pronóstico"), (plantilla, "plantilla .docx")]:
-        if not os.path.exists(ruta):
-            raise FileNotFoundError(f"No se encontró {nombre} en: {ruta}")
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"No se encontró CSV de pronóstico en: {csv_path}")
 
     print("📊 Leyendo datos...")
     df = leer_datos(csv_path)
