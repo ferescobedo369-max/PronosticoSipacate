@@ -1,9 +1,10 @@
 name: Actualizacion Pronostico Sipacate
 
 on:
-  schedule:
-    # 5:00 AM Guatemala = 11:00 UTC (con retraso tipico de GitHub llega ~7:00 AM)
-    - cron: '0 11 * * *'
+  # WORKFLOW PAUSADO TEMPORALMENTE
+  # schedule:
+  #   # 5:00 AM Guatemala = 11:00 UTC (con retraso tipico de GitHub llega ~7:00 AM)
+  #   - cron: '0 11 * * *'
   workflow_dispatch:
 
 jobs:
