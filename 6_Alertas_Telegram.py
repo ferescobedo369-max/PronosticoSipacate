@@ -362,7 +362,25 @@ def main():
     if SOLO_SI_HAY_ALERTA and not hay_alerta:
         print("Sin alertas: no se envía mensaje.")
         return
+    esperar_hasta(os.environ.get("ESPERAR_HASTA", ""))
     enviar_telegram(texto)
+
+
+def esperar_hasta(hora_txt):
+    """Si se indica (ej. '07:00'), espera hasta esa hora de Guatemala antes de enviar.
+    Si ya pasó, envía de inmediato."""
+    import time
+    if not hora_txt.strip():
+        return
+    h, m = (int(x) for x in hora_txt.strip().split(":"))
+    ahora = pd.Timestamp.now(tz=TZ)
+    objetivo = ahora.normalize() + pd.Timedelta(hours=h, minutes=m)
+    falta = (objetivo - ahora).total_seconds()
+    if falta > 0:
+        print(f"Esperando {falta / 60:.0f} min para enviar a las {hora_txt} (hora Guatemala)...")
+        time.sleep(falta)
+    else:
+        print(f"Ya pasó de las {hora_txt}: se envía de inmediato.")
 
 
 if __name__ == "__main__":

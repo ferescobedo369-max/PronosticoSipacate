@@ -1,20 +1,21 @@
 name: Alertas Viento Telegram Sipacate
 
 # Workflow SEPARADO del boletin: no toca 2_Results ni Power BI.
-# En la rama de prueba corre cada vez que se sube un cambio a 'alertas'
-# (GitHub solo muestra "Run workflow" para workflows que existen en main).
-# Cuando se una a main, descomentar el schedule para que corra solo.
+# - schedule: mensaje diario. GitHub suele atrasar los horarios, por eso se programa
+#   a las 5:40 AM Guatemala (11:40 UTC) y el script ESPERA hasta las 7:00 para enviar.
+#   OJO: GitHub solo ejecuta 'schedule' desde la rama principal (main).
+# - push a 'alertas': pruebas (envia de inmediato, sin esperar).
 on:
+  schedule:
+    - cron: '40 11 * * *'
   push:
     branches: [alertas]
-  # schedule:
-  #   # 5:30 AM Guatemala = 11:30 UTC (despues del boletin)
-  #   - cron: '30 11 * * *'
   workflow_dispatch:
 
 jobs:
   alertas:
     runs-on: ubuntu-latest
+    timeout-minutes: 150
 
     steps:
       - name: Descargar codigo
@@ -36,4 +37,6 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           OPENMETEO_APIKEY: ${{ secrets.OPENMETEO_APIKEY }}
+          # Solo la ejecucion programada espera a las 7:00
+          ESPERAR_HASTA: ${{ github.event_name == 'schedule' && '07:00' || '' }}
         run: python 6_Alertas_Telegram.py
