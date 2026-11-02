@@ -1,9 +1,12 @@
 name: Alertas Viento Telegram Sipacate
 
 # Workflow SEPARADO del boletin: no toca 2_Results ni Power BI.
-# En la rama de prueba solo corre manualmente (Run workflow -> elegir la rama).
+# En la rama de prueba corre cada vez que se sube un cambio a 'alertas'
+# (GitHub solo muestra "Run workflow" para workflows que existen en main).
 # Cuando se una a main, descomentar el schedule para que corra solo.
 on:
+  push:
+    branches: [alertas]
   # schedule:
   #   # 5:30 AM Guatemala = 11:30 UTC (despues del boletin)
   #   - cron: '30 11 * * *'
