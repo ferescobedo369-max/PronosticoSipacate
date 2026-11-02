@@ -294,7 +294,7 @@ def construir_mensaje(area, hoy):
             lineas.append(f"  • {rango_txt(b['hora'].iloc[0], b['hora'].iloc[-1])}: {alerta_txt(b)}")
         if malas:
             hay_alerta = True
-            lineas.append("  → Se recomienda <b>no realizar ningún tipo de quema</b> en esos horarios.")
+            lineas.append("  → <b>Recomendación:</b> No realizar quemas en esos horarios.")
 
         # --- Cambios de dirección ---
         cambios = []
@@ -302,17 +302,14 @@ def construir_mensaje(area, hoy):
             h, r = nxt["hora"].iloc[0], hacia(nxt["direccion"].iloc[0])
             cambios.append(f"{h:02d}:00 gira hacia el {r} " + ("⚠️" if nxt["desfavorable"].iloc[0] else "✅"))
         if cambios:
-            lineas.append("  🔄 Cambio de dirección: " + " · ".join(cambios))
+            lineas.append("  🔄 Cambio de dirección de viento: " + " · ".join(cambios))
 
         if dia in frentes:
             hay_alerta = True
             lineas.append(f"  🌬️ <b>Posible influencia de frente frío</b>: {html.escape(frentes[dia])}")
 
-    lineas += ["",
-               "🧭 hacia las salineras   ⛔ hacia las salineras con viento o ráfagas fuertes   🔄 cambio de dirección"]
     if LINK_PRONOSTICO:
-        lineas.append(f'📊 <a href="{html.escape(LINK_PRONOSTICO)}">Consulte el pronóstico interactivo</a>')
-    lineas += ["<i>Pronóstico ECMWF vía Open-Meteo; puede cambiar, revisar la actualización diaria.</i>"]
+        lineas += ["", f'📊 <a href="{html.escape(LINK_PRONOSTICO)}">Consulte el pronóstico interactivo</a>']
     return "\n".join(lineas), hay_alerta
 
 
