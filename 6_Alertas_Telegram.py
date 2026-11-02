@@ -48,6 +48,7 @@ DIR_DESFAVORABLE = (270.0, 90.0)
 # Criterios para "posible frente frío / norte" (heurístico, calibrar con INSIVUMEH)
 FF_SECTOR_NORTE = (315.0, 45.0)  # viento que viene del NO, N o NE
 FF_HORAS_NORTE = 6               # horas mínimas del día con viento del norte
+FF_VIENTO_MIN = 12.0             # km/h: no cuenta la brisa terrestre débil de la madrugada
 FF_SUBIDA_PRESION = 2.0          # hPa, subida de presión media respecto al día anterior
 FF_BAJADA_TEMP = 1.5             # °C, bajada de temperatura media respecto al día anterior
 
@@ -211,7 +212,7 @@ def resumir_area(df_all):
 def detectar_frente_frio(area):
     """Devuelve {dia: texto} con los días que muestran señales de frente frío."""
     diario = area.groupby("dia").agg(presion=("presion", "mean"), temp=("temp", "mean"))
-    norte = area[en_sector(area["direccion"], FF_SECTOR_NORTE)]
+    norte = area[en_sector(area["direccion"], FF_SECTOR_NORTE) & (area["viento"] >= FF_VIENTO_MIN)]
     diario["horas_norte"] = norte.groupby("dia").size()
     diario["horas_norte"] = diario["horas_norte"].fillna(0).astype(int)
     diario["dp"] = diario["presion"].diff()
