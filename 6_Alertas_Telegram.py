@@ -55,7 +55,7 @@ FF_SUBIDA_PRESION = 2.0          # hPa, subida de presión media respecto al dí
 FF_BAJADA_TEMP = 1.5             # °C, bajada de temperatura media respecto al día anterior
 
 SOLO_SI_HAY_ALERTA = False  # True = no envía nada en días sin alertas
-LINK_PRONOSTICO = ""        # enlace al pronóstico interactivo (Power BI); vacío = no se muestra
+LINK_PRONOSTICO = "https://app.powerbi.com/view?r=eyJrIjoiNGRkMzFlZjMtMzViZi00MjhiLWEzNDYtYzQ3MTEzNWRmNDhhIiwidCI6Ijg5MTkwMzQ4LTg5MjUtNDQxOS1hNTZhLTE3ZDIxOGE3YzgwYyIsImMiOjR9"  # Power BI; vacío = no se muestra
 TZ = "America/Guatemala"
 
 # =============================================================
@@ -309,7 +309,10 @@ def construir_mensaje(area, hoy):
             lineas.append(f"  🌬️ <b>Posible influencia de frente frío</b>: {html.escape(frentes[dia])}")
 
     if LINK_PRONOSTICO:
-        lineas += ["", f'📊 <a href="{html.escape(LINK_PRONOSTICO)}">Consulte el pronóstico interactivo</a>']
+        lineas += ["",
+                   "📊 Para mayor información sobre las proyecciones de velocidad y dirección de viento, "
+                   "consulte el siguiente enlace:",
+                   html.escape(LINK_PRONOSTICO)]
     return "\n".join(lineas), hay_alerta
 
 
