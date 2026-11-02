@@ -32,18 +32,20 @@ import pandas as pd
 # =============================================================
 # CONFIGURACIÓN (ajustar aquí)
 # =============================================================
-UMBRAL_VIENTO = 15.0        # km/h, velocidad media del viento
-UMBRAL_RAFAGA = 15.0        # km/h, ráfagas (subir si llegan demasiadas alertas)
+UMBRAL_VIENTO = 15.0        # km/h, viento medio (solo cuenta si va hacia el sur)
+UMBRAL_RAFAGA = 15.0        # km/h, ráfagas (solo cuentan si van hacia el sur)
 ALTURA = "10m"              # "10m" o "100m" para velocidad y dirección
 
 HORA_MONITOREO = (6, 17)    # de 06:00 a 17:00 (inclusive)
 HORA_QUEMA = (12, 16)       # ventana acordada en la mesa: 12:00 a 16:00 (inclusive)
 
-# Dirección DE DONDE VIENE que se considera desfavorable.
-# (270, 90) = igual que Zona_Favorable de Power BI: todo viento con componente
-# del norte, que empuja la pavesa hacia el sur.
-# Estrictamente "hacia S, SE y SO" sería (292.5, 67.5).
-DIR_DESFAVORABLE = (270.0, 90.0)
+# REGLA PRINCIPAL: manda la dirección.
+#   Viento HACIA el norte, noreste, noroeste, este u oeste → favorable (sin importar velocidad).
+#   Viento HACIA el sur, sureste o suroeste → desfavorable; solo ahí se reportan
+#   velocidad y ráfagas (⛔ si superan los umbrales).
+# Se expresa como dirección DE DONDE VIENE (la que entrega Open-Meteo):
+#   viene del NO, N o NE (292.5° a 67.5°) = va hacia SE, S o SO.
+DIR_DESFAVORABLE = (292.5, 67.5)
 
 # Criterios para "posible frente frío / norte" (heurístico, calibrar con INSIVUMEH)
 FF_SECTOR_NORTE = (315.0, 45.0)  # viento que viene del NO, N o NE
@@ -233,63 +235,49 @@ def detectar_frente_frio(area):
     return res
 
 
-def describir(bloque):
-    """Texto de un grupo de horas seguidas."""
-    vmin, vmax = bloque["viento"].min(), bloque["viento"].max()
-    vel = f"{vmax:.0f} km/h" if round(vmin) == round(vmax) else f"{vmin:.0f}–{vmax:.0f} km/h"
-    rumbo = hacia(bloque["direccion"].iloc[len(bloque) // 2])
-    return f"viento {vel} hacia el {rumbo}, ráfagas hasta {bloque['rafaga'].max():.0f} km/h"
+def rumbo_txt(b):
+    """Hacia dónde va el viento en un bloque de horas (promedio vectorial)."""
+    rad = np.deg2rad(b["direccion"])
+    d = (np.rad2deg(np.arctan2(np.sin(rad).mean(), np.cos(rad).mean())) + 360) % 360
+    return hacia(d)
+
+
+def bloques(m, col):
+    """Separa en grupos de horas seguidas con el mismo valor de `col`."""
+    clave = (m["hora"].diff().ne(1) | m[col].ne(m[col].shift())).cumsum()
+    return [b for _, b in m.groupby(clave)]
 
 
 def alerta_txt(b):
-    """Frase de alerta para un bloque de horas seguidas con el mismo problema."""
-    v = b["viento"].max()
-    raf = b["rafaga"].max()
-    rumbo = hacia(b["direccion"].iloc[len(b) // 2])
-    partes = []
-    if b["fuerte"].any():
-        partes.append(f"💨 Viento fuerte de {v:.0f} km/h hacia el {rumbo}")
-    if b["rafaga_fuerte"].any():
-        partes.append(("con" if partes else "💨 Se prevén") + f" ráfagas de hasta {raf:.0f} km/h")
-    if b["desfavorable"].any():
-        if partes:
-            partes.append("🧭 (riesgo de pavesa en salineras)")
-        else:
-            partes.append(f"🧭 Viento hacia el {rumbo} ({v:.0f} km/h), riesgo de pavesa en salineras")
-    elif not b["fuerte"].any():
-        partes.append(f"(viento {v:.0f} km/h hacia el {rumbo})")
-    return ", ".join(partes[:1]) + (" " + " ".join(partes[1:]) if len(partes) > 1 else "")
-
-
-def problemas(fila):
-    p = []
-    if fila["desfavorable"]:
-        p.append("dirección")
-    if fila["fuerte"]:
-        p.append("velocidad")
-    if fila["rafaga_fuerte"]:
-        p.append("ráfaga")
-    return p
+    """Frase para un bloque de horas con viento hacia las salineras."""
+    v, raf, rumbo = b["viento"].max(), b["rafaga"].max(), rumbo_txt(b)
+    if b["fuerte"].any() or b["rafaga_fuerte"].any():
+        return (f"⛔ Viento hacia el <b>{rumbo}</b> de {v:.0f} km/h con ráfagas de hasta "
+                f"<b>{raf:.0f} km/h</b>: riesgo alto de pavesa en salineras")
+    return (f"🧭 Viento hacia el <b>{rumbo}</b> ({v:.0f} km/h, ráfagas hasta {raf:.0f} km/h): "
+            f"riesgo de pavesa en salineras")
 
 
 def construir_mensaje(area, hoy):
     frentes = detectar_frente_frio(area)   # usa también el día anterior como referencia
     area = area[area["dia"] >= hoy]
     lineas = ["🔥 <b>Pronóstico de viento para quemas – Sipacate</b>",
-              f"<i>Umbrales: viento &gt; {UMBRAL_VIENTO:.0f} km/h, ráfagas &gt; {UMBRAL_RAFAGA:.0f} km/h, "
-              f"dirección hacia el sur/sureste/suroeste. Viento a {ALTURA}.</i>"]
+              "<i>Favorable: viento hacia el norte, noreste, noroeste, este u oeste. "
+              "Desfavorable: hacia el sur, sureste o suroeste. "
+              f"⛔ = desfavorable con viento &gt; {UMBRAL_VIENTO:.0f} km/h o ráfagas &gt; {UMBRAL_RAFAGA:.0f} km/h. "
+              f"Viento a {ALTURA}.</i>"]
     hay_alerta = False
 
     for dia, d in area.groupby("dia"):
         lineas.append("")
         lineas.append(f"📅 <b>{fecha_txt(dia)}</b>")
 
-        # --- Ventana de quema 12–16 ---
+        # --- Ventana de quema 12–16: solo importa la dirección ---
         q = d[d["hora"].between(*HORA_QUEMA)]
-        ok = q[~(q["desfavorable"] | q["fuerte"] | q["rafaga_fuerte"])]
+        ok = q[~q["desfavorable"]]
         if len(ok) == len(q):
             lineas.append(f"✅ Quema {rango_txt(*HORA_QUEMA)}: <b>condiciones favorables</b> "
-                          f"({describir(q)})")
+                          f"(viento hacia el {rumbo_txt(q)})")
         elif ok.empty:
             hay_alerta = True
             lineas.append(f"⛔ Quema {rango_txt(*HORA_QUEMA)}: <b>NO se recomienda quemar</b>")
@@ -298,25 +286,30 @@ def construir_mensaje(area, hoy):
             buenas = ", ".join(rango_txt(a, b) for a, b in agrupar_horas(ok["hora"]))
             lineas.append(f"⚠️ Quema: <b>solo recomendable {buenas}</b>")
 
-        # --- Alertas 06–17 ---
-        m = d[d["hora"].between(*HORA_MONITOREO)].copy()
-        m["motivo"] = m.apply(lambda f: "+".join(problemas(f)), axis=1)
-        malas = m[m["motivo"] != ""]
-        if not malas.empty:
+        # --- 06–17: horas con viento hacia las salineras ---
+        m = d[d["hora"].between(*HORA_MONITOREO)]
+        bl = bloques(m, "desfavorable")
+        malas = [b for b in bl if b["desfavorable"].iloc[0]]
+        for b in malas:
+            lineas.append(f"  • {rango_txt(b['hora'].iloc[0], b['hora'].iloc[-1])}: {alerta_txt(b)}")
+        if malas:
             hay_alerta = True
-            # agrupar horas seguidas con el mismo motivo
-            m_bloque = (malas["hora"].diff().ne(1) | malas["motivo"].ne(malas["motivo"].shift())).cumsum()
-            for _, b in malas.groupby(m_bloque):
-                h1, h2 = b["hora"].iloc[0], b["hora"].iloc[-1]
-                lineas.append(f"  • {rango_txt(h1, h2)}: {alerta_txt(b)}")
             lineas.append("  → Se recomienda <b>no realizar ningún tipo de quema</b> en esos horarios.")
+
+        # --- Cambios de dirección ---
+        cambios = []
+        for nxt in bl[1:]:
+            h, r = nxt["hora"].iloc[0], hacia(nxt["direccion"].iloc[0])
+            cambios.append(f"{h:02d}:00 gira hacia el {r} " + ("⚠️" if nxt["desfavorable"].iloc[0] else "✅"))
+        if cambios:
+            lineas.append("  🔄 Cambio de dirección: " + " · ".join(cambios))
 
         if dia in frentes:
             hay_alerta = True
             lineas.append(f"  🌬️ <b>Posible influencia de frente frío</b>: {html.escape(frentes[dia])}")
 
     lineas += ["",
-               "🧭 = viento hacia las salineras (sur)   💨 = viento o ráfaga fuerte"]
+               "🧭 hacia las salineras   ⛔ hacia las salineras con viento o ráfagas fuertes   🔄 cambio de dirección"]
     if LINK_PRONOSTICO:
         lineas.append(f'📊 <a href="{html.escape(LINK_PRONOSTICO)}">Consulte el pronóstico interactivo</a>')
     lineas += ["<i>Pronóstico ECMWF vía Open-Meteo; puede cambiar, revisar la actualización diaria.</i>"]
