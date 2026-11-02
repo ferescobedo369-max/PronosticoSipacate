@@ -2,8 +2,10 @@ name: Actualizacion Pronostico Sipacate
 
 on:
   schedule:
-    # 5:00 AM Guatemala = 11:00 UTC (con retraso tipico de GitHub llega ~7:00 AM)
-    - cron: '0 11 * * *'
+    # Objetivo: datos listos ~4:00 AM Guatemala, antes de Power BI (6:30) y Telegram (7:30).
+    # Programado 3:40 AM Guatemala = 9:40 UTC. Se evita la hora en punto (:00) porque
+    # GitHub atrasa mas esos horarios (en mayo, el de 5:00 llego a terminar hasta las 8:27).
+    - cron: '40 9 * * *'
   workflow_dispatch:
 
 jobs:
