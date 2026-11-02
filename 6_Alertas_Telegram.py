@@ -261,7 +261,7 @@ def alerta_txt(b):
 def construir_mensaje(area, hoy):
     frentes = detectar_frente_frio(area)   # usa también el día anterior como referencia
     area = area[area["dia"] >= hoy]
-    lineas = ["🔥 <b>Pronóstico de viento para quemas – Sipacate</b>",
+    lineas = ["🔥 <b>Perspectiva climática -Sipacate-</b>",
               "<i>Favorable: viento hacia el norte, noreste, noroeste, este u oeste. "
               "Desfavorable: hacia el sur, sureste o suroeste. "
               f"⛔ = desfavorable con viento &gt; {UMBRAL_VIENTO:.0f} km/h o ráfagas &gt; {UMBRAL_RAFAGA:.0f} km/h. "
