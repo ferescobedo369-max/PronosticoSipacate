@@ -320,12 +320,20 @@ def construir_mensaje(area, hoy):
 # 4. Envío por Telegram
 # =============================================================
 def enviar_telegram(texto):
-    token = os.environ.get("TELEGRAM_TOKEN", "").strip()
-    chats = [c.strip() for c in os.environ.get("TELEGRAM_CHAT_ID", "").split(",") if c.strip()]
+    import re
+    crudo = os.environ.get("TELEGRAM_TOKEN", "")
+    # Tolera token pegado con comillas, la palabra "bot" delante o la URL completa
+    m = re.search(r"\d{6,}:[A-Za-z0-9_-]{30,}", crudo)
+    token = m.group(0) if m else crudo.strip()
+    chats = [c for c in re.findall(r"-?\d+", os.environ.get("TELEGRAM_CHAT_ID", ""))]
     if not token or not chats:
         print("⚠ TELEGRAM_TOKEN / TELEGRAM_CHAT_ID no configurados: solo se muestra el mensaje.")
         return
+    if not m:
+        print(f"⚠ El TELEGRAM_TOKEN no tiene el formato esperado (número:clave). Longitud: {len(crudo)}")
+
     import requests
+    errores = []
     for chat in chats:
         r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
                           data={"chat_id": chat, "text": texto, "parse_mode": "HTML",
@@ -333,7 +341,10 @@ def enviar_telegram(texto):
         if r.ok:
             print(f"✓ Mensaje enviado a {chat}")
         else:
-            raise RuntimeError(f"Telegram respondió {r.status_code}: {r.text}")
+            print(f"✗ Error con {chat}: {r.status_code} {r.text}")
+            errores.append(chat)
+    if errores:
+        raise RuntimeError(f"No se pudo enviar a: {', '.join(errores)}")
 
 
 def main():
