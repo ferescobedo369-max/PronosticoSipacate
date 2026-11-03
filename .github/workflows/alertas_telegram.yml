@@ -24,23 +24,42 @@ jobs:
   alertas:
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    permissions:
+      actions: read
+      contents: read
 
     steps:
+      - name: Evitar duplicados (si ya se lanzo a mano hoy)
+        id: guard
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          DESDE="$(TZ=America/Guatemala date +%F)T06:00:00Z"   # 00:00 hora Guatemala
+          N=$(gh api "repos/${{ github.repository }}/actions/workflows/alertas_telegram.yml/runs?event=workflow_dispatch&created=>=$DESDE" \
+                --jq '[.workflow_runs[] | select(.conclusion=="success" or .status!="completed")] | length')
+          echo "Ejecuciones manuales hoy: $N"
+          if [ "$N" -gt 0 ]; then echo "duplicado=si" >> "$GITHUB_OUTPUT"; else echo "duplicado=no" >> "$GITHUB_OUTPUT"; fi
+
       - name: Descargar codigo
+        if: steps.guard.outputs.duplicado != 'si'
         uses: actions/checkout@v4
 
       - name: Instalar Python
+        if: steps.guard.outputs.duplicado != 'si'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Instalar librerias Python
+        if: steps.guard.outputs.duplicado != 'si'
         run: |
           pip install --upgrade pip
           pip install geopandas shapely numpy pandas requests \
             openmeteo-requests requests-cache retry-requests
 
       - name: Enviar alertas por Telegram
+        if: steps.guard.outputs.duplicado != 'si'
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
