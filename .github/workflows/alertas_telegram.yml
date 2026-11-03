@@ -14,11 +14,16 @@ on:
       - '6_Alertas_Telegram.py'
       - '.github/workflows/alertas_telegram.yml'
   workflow_dispatch:
+    inputs:
+      esperar_hasta:
+        description: 'Hora de Guatemala para enviar (ej. 07:30). Vacio = enviar de inmediato'
+        required: false
+        default: ''
 
 jobs:
   alertas:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 180
 
     steps:
       - name: Descargar codigo
@@ -41,5 +46,5 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           OPENMETEO_APIKEY: ${{ secrets.OPENMETEO_APIKEY }}
           # Solo la ejecucion programada espera a las 7:30
-          ESPERAR_HASTA: ${{ github.event_name == 'schedule' && '07:30' || '' }}
+          ESPERAR_HASTA: ${{ github.event_name == 'schedule' && '07:30' || inputs.esperar_hasta || '' }}
         run: python 6_Alertas_Telegram.py
