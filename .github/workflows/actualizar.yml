@@ -88,5 +88,12 @@ jobs:
             git stash pop
             git add 2_Results/
             git commit -m "Actualizacion automatica - $(TZ='America/Guatemala' date +'%Y-%m-%d %H:%M') hora Guatemala"
-            git push
+            # Reintentos: a veces GitHub rechaza el push por un error momentaneo del servidor
+            for i in 1 2 3 4 5; do
+              if git push; then echo "Resultados guardados"; exit 0; fi
+              echo "Push fallo (intento $i de 5). Reintento en 30 s..."
+              sleep 30
+              git pull origin main --no-rebase --no-edit
+            done
+            echo "No se pudo guardar despues de 5 intentos"; exit 1
           fi
