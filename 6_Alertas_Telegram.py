@@ -319,32 +319,163 @@ def construir_mensaje(area, hoy):
 # =============================================================
 # 4. Envío por Telegram
 # =============================================================
-def enviar_telegram(texto):
+# --- Lista de suscriptores (chat personal) -------------------------------
+# Quien toca "Iniciar" en el bot queda registrado y recibe el mensaje en privado,
+# siempre que siga siendo miembro del grupo. La lista se guarda CIFRADA en el
+# repositorio (es público), con una clave derivada del TELEGRAM_TOKEN.
+ARCHIVO_SUSCRIPTORES = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "3_Suscriptores", "suscriptores.enc")
+ESTADOS_MIEMBRO = {"creator", "administrator", "member", "restricted"}
+
+
+def _token():
     import re
     crudo = os.environ.get("TELEGRAM_TOKEN", "")
     # Tolera token pegado con comillas, la palabra "bot" delante o la URL completa
     m = re.search(r"\d{6,}:[A-Za-z0-9_-]{30,}", crudo)
-    token = m.group(0) if m else crudo.strip()
-    chats = [c for c in re.findall(r"-?\d+", os.environ.get("TELEGRAM_CHAT_ID", ""))]
-    if not token or not chats:
+    if crudo and not m:
+        print(f"⚠ El TELEGRAM_TOKEN no tiene el formato esperado (número:clave). Longitud: {len(crudo)}")
+    return m.group(0) if m else crudo.strip()
+
+
+def _api(token):
+    import requests
+
+    def llamar(metodo, **params):
+        r = requests.post(f"https://api.telegram.org/bot{token}/{metodo}", data=params, timeout=30)
+        try:
+            j = r.json()
+        except Exception:
+            j = {"ok": False, "description": r.text}
+        j["_status"] = r.status_code
+        return j
+    return llamar
+
+
+def _fernet(token):
+    import base64
+    import hashlib
+    from cryptography.fernet import Fernet
+    clave = hashlib.sha256(b"sipacate-suscriptores:" + token.encode()).digest()
+    return Fernet(base64.urlsafe_b64encode(clave))
+
+
+def cargar_suscriptores(token):
+    import json
+    vacio = {"offset": 0, "personas": {}}
+    if not os.path.exists(ARCHIVO_SUSCRIPTORES):
+        return vacio
+    try:
+        with open(ARCHIVO_SUSCRIPTORES, "rb") as f:
+            return json.loads(_fernet(token).decrypt(f.read()))
+    except Exception:
+        print("⚠ No se pudo leer la lista de suscriptores (¿cambió el token?). Se empieza una lista nueva.")
+        return vacio
+
+
+def guardar_suscriptores(token, subs):
+    import json
+    os.makedirs(os.path.dirname(ARCHIVO_SUSCRIPTORES), exist_ok=True)
+    datos = json.dumps(subs, ensure_ascii=False, sort_keys=True).encode()
+    with open(ARCHIVO_SUSCRIPTORES, "wb") as f:
+        f.write(_fernet(token).encrypt(datos))
+
+
+def registrar_nuevos(api, subs):
+    """Lee quién tocó Iniciar (o bloqueó el bot) desde la última revisión."""
+    import json
+    params = {"timeout": 0, "allowed_updates": json.dumps(["message", "my_chat_member"])}
+    if subs.get("offset"):
+        params["offset"] = subs["offset"] + 1
+    r = api("getUpdates", **params)
+    if not r.get("ok"):
+        print(f"⚠ No se pudo leer getUpdates: {r.get('description')}")
+        return []
+    nuevos = []
+    hoy = pd.Timestamp.now(tz=TZ).strftime("%Y-%m-%d")
+    for u in r.get("result", []):
+        subs["offset"] = max(subs.get("offset", 0), u["update_id"])
+        msg = u.get("message") or {}
+        chat = msg.get("chat") or {}
+        if chat.get("type") == "private" and (msg.get("text") or "").startswith("/start"):
+            cid = str(chat["id"])
+            if cid not in subs["personas"]:
+                subs["personas"][cid] = {"nombre": chat.get("first_name", ""), "desde": hoy}
+                nuevos.append(cid)
+        cm = u.get("my_chat_member") or {}
+        if (cm.get("chat") or {}).get("type") == "private" and \
+                (cm.get("new_chat_member") or {}).get("status") == "kicked":
+            subs["personas"].pop(str(cm["chat"]["id"]), None)   # bloqueó el bot
+    return nuevos
+
+
+def enviar_telegram(texto):
+    import re
+    import json
+    token = _token()
+    fijos = re.findall(r"-?\d+", os.environ.get("TELEGRAM_CHAT_ID", ""))
+    if not token or not fijos:
         print("⚠ TELEGRAM_TOKEN / TELEGRAM_CHAT_ID no configurados: solo se muestra el mensaje.")
         return
-    if not m:
-        print(f"⚠ El TELEGRAM_TOKEN no tiene el formato esperado (número:clave). Longitud: {len(crudo)}")
+    api = _api(token)
+    grupo = next((c for c in fijos if c.startswith("-")), None)
 
-    import requests
+    def enviar(chat, txt):
+        return api("sendMessage", chat_id=chat, text=txt, parse_mode="HTML",
+                   disable_web_page_preview="true")
+
+    # 1) Destinos fijos (grupo y chats del secret): si fallan, el workflow falla
     errores = []
-    for chat in chats:
-        r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                          data={"chat_id": chat, "text": texto, "parse_mode": "HTML",
-                                "disable_web_page_preview": "true"}, timeout=30)
-        if r.ok:
+    for chat in fijos:
+        r = enviar(chat, texto)
+        if r.get("ok"):
             print(f"✓ Mensaje enviado a {chat}")
         else:
-            print(f"✗ Error con {chat}: {r.status_code} {r.text}")
+            print(f"✗ Error con {chat}: {r['_status']} {r.get('description')}")
             errores.append(chat)
+
+    # 2) Suscriptores: quienes tocaron Iniciar y siguen en el grupo.
+    #    Si algo falla aquí, no afecta los envíos fijos de arriba.
+    try:
+        enviar_suscriptores(api, token, texto, fijos, grupo, enviar)
+    except Exception as e:
+        print(f"⚠ Error en el envío a suscriptores (el grupo sí recibió el mensaje): {e!r}")
+
     if errores:
         raise RuntimeError(f"No se pudo enviar a: {', '.join(errores)}")
+
+
+def enviar_suscriptores(api, token, texto, fijos, grupo, enviar):
+    import json
+    subs = cargar_suscriptores(token)
+    antes = json.dumps(subs, sort_keys=True)
+    nuevos = registrar_nuevos(api, subs)
+    enviados = 0
+    for cid in sorted(subs["personas"]):
+        if cid in fijos:
+            continue
+        if grupo:
+            m = api("getChatMember", chat_id=grupo, user_id=cid)
+            if m.get("ok") and m["result"].get("status") not in ESTADOS_MIEMBRO:
+                print(f"· {cid} ya no está en el grupo: no se le envía")
+                continue
+        if cid in nuevos:
+            enviar(cid, "✅ Quedaste registrado en la <b>Perspectiva climática -Sipacate-</b>. "
+                        "Desde hoy recibirás aquí el pronóstico diario.")
+        r = enviar(cid, texto)
+        if r.get("ok"):
+            enviados += 1
+        elif r["_status"] == 403:                      # bloqueó el bot o borró el chat
+            print(f"· {cid} bloqueó el bot: se quita de la lista")
+            subs["personas"].pop(cid, None)
+        else:
+            print(f"⚠ No se pudo enviar a suscriptor {cid}: {r['_status']} {r.get('description')}")
+    print(f"✓ Suscriptores: {enviados} mensajes privados enviados, {len(nuevos)} nuevos, "
+          f"{len(subs['personas'])} en la lista")
+
+    if os.environ.get("GUARDAR_SUSCRIPTORES") == "1" and json.dumps(subs, sort_keys=True) != antes:
+        guardar_suscriptores(token, subs)
+        print("✓ Lista de suscriptores actualizada")
 
 
 def main():
