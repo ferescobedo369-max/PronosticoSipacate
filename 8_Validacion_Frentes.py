@@ -365,7 +365,8 @@ def texto_pronostico_insivumeh():
         l.append("   sin menciones de frentes fríos, empujes de aire frío o vientos del norte fuertes")
     esc = [ln.strip() for ln in txt.splitlines() if "escuintla" in ln.lower()]
     for ln in esc[:3]:
-        l.append(f"   📍 {html.escape(re.sub(r'\s+', ' ', ln))}")
+        ln = html.escape(re.sub(r"\s+", " ", ln))
+        l.append(f"   📍 {ln}")
     return "\n".join(l), bool(frases)
 
 
