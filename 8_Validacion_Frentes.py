@@ -31,6 +31,10 @@ _spec.loader.exec_module(al)
 TZ = al.TZ
 
 URL_MAPA_NOAA = "https://www.nhc.noaa.gov/tafb_latest/USA_latest.gif"
+URL_SAT_INSIVUMEH = "https://insivumeh.gob.gt/img/guate_truecolor.png"        # GOES-19 color verdadero
+URL_BOLETIN_INSIVUMEH = "https://insivumeh.gob.gt/img/Papa_Bravo/Papa_iFoxtrot/Boletin_Informativo.pdf"
+CLAVES_INSIVUMEH = ["frente frío", "frente frio", "empuje de aire frío", "empuje de aire frio", "aire frío",
+                    "vientos del norte", "viento del norte", "nortes", "alta presión", "alta presion"]
 URLS_TWD = {
     "Atlántico / Golfo": ["https://tgftp.nws.noaa.gov/data/raw/ax/axnt20.knhc.twd.at.txt",
                           "https://www.nhc.noaa.gov/text/MIATWDAT.shtml"],
@@ -277,18 +281,51 @@ def texto_noaa():
     return "\n".join(l), hay
 
 
-def mapa_noaa(ruta):
+def descargar_imagen(url, ruta):
     import requests
     from PIL import Image
     try:
-        r = requests.get(URL_MAPA_NOAA, headers=UA, timeout=60)
+        r = requests.get(url, headers=UA, timeout=60)
         if r.ok and len(r.content) > 10000:
-            Image.open(io.BytesIO(r.content)).convert("RGB").save(ruta, "PNG")
+            img = Image.open(io.BytesIO(r.content)).convert("RGB")
+            if max(img.size) > 2560:                         # Telegram limita el tamaño de las fotos
+                img.thumbnail((2560, 2560))
+            img.save(ruta, "PNG")
+            print(f"✓ Imagen {url} ({img.size[0]}x{img.size[1]})")
             return True
-        print(f"⚠ Mapa NOAA: respuesta {r.status_code}, {len(r.content)} bytes")
+        print(f"⚠ Imagen {url}: respuesta {r.status_code}, {len(r.content)} bytes")
     except Exception as e:
-        print(f"⚠ No se pudo descargar el mapa NOAA: {e!r}")
+        print(f"⚠ No se pudo descargar {url}: {e!r}")
     return False
+
+
+def texto_insivumeh():
+    """Boletín informativo del INSIVUMEH (PDF): fecha y frases sobre frentes fríos o nortes."""
+    import requests
+    l = ["4️⃣ <b>INSIVUMEH – Boletín informativo</b>"]
+    try:
+        r = requests.get(URL_BOLETIN_INSIVUMEH, headers=UA, timeout=60)
+        if not r.ok or not r.content.startswith(b"%PDF"):
+            l.append(f"• No se pudo leer hoy (respuesta {r.status_code})")
+            return "\n".join(l), False
+        from pypdf import PdfReader
+        txt = "\n".join((pg.extract_text() or "") for pg in PdfReader(io.BytesIO(r.content)).pages)
+    except Exception as e:
+        print(f"⚠ Boletín INSIVUMEH: {e!r}")
+        l.append("• No se pudo leer hoy")
+        return "\n".join(l), False
+    plano = re.sub(r"\s+", " ", txt)
+    m = re.search(r"\b\d{1,2} de [a-záéíóú]+ (de|del) 20\d\d\b", plano, re.I)
+    l.append(f"• Fecha del boletín: <b>{m.group(0) if m else 'no indicada'}</b>")
+    frases = [f.strip() for f in re.split(r"(?<=[.!?])\s+", plano)
+              if any(c in f.lower() for c in CLAVES_INSIVUMEH) and 20 < len(f) < 400]
+    if frases:
+        for f in frases[:4]:
+            l.append(f"   « {html.escape(f)} »")
+    else:
+        l.append("   sin menciones de frentes fríos o vientos del norte")
+    print(f"Boletín INSIVUMEH: {len(txt)} caracteres de texto, {len(frases)} frases relevantes")
+    return "\n".join(l), bool(frases)
 
 
 # -------------------------------------------------------------------------
@@ -323,6 +360,7 @@ def main():
 
     t_ecmwf = texto_ecmwf(resumen_diario(area, hoy), ev)
     t_noaa, noaa_si = texto_noaa()
+    t_insiv, _ = texto_insivumeh()
 
     if ev and noaa_si:
         concl = "✅ <b>Coinciden</b>: el modelo y la NOAA indican frente frío."
@@ -335,9 +373,9 @@ def main():
 
     cab = (f"🧪 <b>VALIDACIÓN FRENTES FRÍOS</b> – {al.fecha_txt(ahora)} {ahora:%H:%M}\n"
            "<i>Solo para revisión: esto NO se envió al grupo.</i>")
-    resumen = "\n\n".join([cab, t_ecmwf, t_noaa, "3️⃣ " + concl,
-                           "🗺️ Abajo: gráfica del modelo y mapa de superficie de la NOAA "
-                           "(frente frío = línea azul con triángulos)."])
+    resumen = "\n\n".join([cab, t_ecmwf, t_noaa, t_insiv, "3️⃣ " + concl,
+                           "🗺️ Abajo: gráfica del modelo, mapa de superficie de la NOAA "
+                           "(frente frío = línea azul con triángulos) e imagen satelital del INSIVUMEH."])
     textos = [resumen]
     if ev:
         textos.append("👇 <b>Vista previa de la alerta para el grupo</b> (no enviada):\n\n"
@@ -348,8 +386,12 @@ def main():
     grafica(area, ev, g)
     fotos.append((g, "Modelo ECMWF – Sipacate: presión, temperatura, humedad y viento"))
     m = os.path.join(BASE, "_mapa_noaa.png")
-    if mapa_noaa(m):
+    if descargar_imagen(URL_MAPA_NOAA, m):
         fotos.append((m, "NOAA – Análisis de superficie más reciente (frente frío = línea azul con triángulos)"))
+    sat = os.path.join(BASE, "_satelite_insivumeh.png")
+    if descargar_imagen(URL_SAT_INSIVUMEH, sat):
+        fotos.append((sat, "INSIVUMEH – GOES-19 color verdadero (Guatemala). Un frente suele verse como "
+                           "una banda larga de nubes que baja desde el Golfo de México"))
 
     for t in textos:
         print(t + "\n" + "-" * 60)

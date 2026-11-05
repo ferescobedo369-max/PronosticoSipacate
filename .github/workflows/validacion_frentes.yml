@@ -33,7 +33,7 @@ jobs:
       - name: Instalar librerias Python
         run: |
           pip install --upgrade pip
-          pip install geopandas shapely numpy pandas requests matplotlib pillow deep-translator \
+          pip install geopandas shapely numpy pandas requests matplotlib pillow deep-translator pypdf \
             openmeteo-requests requests-cache retry-requests cryptography
 
       - name: Enviar validacion a chat personal
@@ -43,3 +43,11 @@ jobs:
           OPENMETEO_APIKEY: ${{ secrets.OPENMETEO_APIKEY }}
           SOLO_MOSTRAR: ${{ inputs.solo_mostrar }}
         run: python 8_Validacion_Frentes.py
+
+      - name: Guardar imagenes para revision (solo en modo revision)
+        if: ${{ inputs.solo_mostrar == '1' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: imagenes-validacion
+          path: _*.png
+          retention-days: 3
