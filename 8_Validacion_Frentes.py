@@ -447,20 +447,34 @@ def main():
     t_insiv = texto_insivumeh()[0] if USAR_BOLETIN_INSIVUMEH else None
     t_pron, insiv_si = texto_pronostico_insivumeh()
 
-    if ev and noaa_si:
-        concl = "✅ <b>Coinciden</b>: el modelo y la NOAA indican frente frío."
-    elif ev:
-        concl = "⚠️ <b>Solo el modelo</b> detecta frente. Revisar el mapa: ¿posible falsa alarma o llega después?"
-    elif noaa_si:
-        concl = "⚠️ <b>Solo la NOAA</b> menciona un frente. ¿Llegará a Sipacate? Revisar si los criterios son muy estrictos."
-    else:
-        concl = "✅ Ninguna fuente indica frente frío cerca."
-
+    # El MODELO decide si hay frente; la NOAA y el INSIVUMEH solo lo CONFIRMAN.
     cab = (f"🧪 <b>VALIDACIÓN FRENTES FRÍOS</b> – {al.fecha_txt(ahora)} {ahora:%H:%M}\n"
            "<i>Solo para revisión: esto NO se envió al grupo.</i>")
-    concl += ("\n🇬🇹 El INSIVUMEH <b>sí</b> menciona frente frío o viento del norte en la costa sur."
-              if insiv_si else "\n🇬🇹 El INSIVUMEH no menciona frente frío ni viento del norte en la costa sur.")
-    resumen = "\n\n".join([x for x in [cab, t_ecmwf, t_noaa, t_pron, t_insiv, "3️⃣ " + concl,
+    if ev:
+        conf = [n for n, si in [("NOAA", noaa_si), ("INSIVUMEH", insiv_si)] if si]
+        if len(conf) == 2:
+            concl = ("✅ <b>Frente confirmado</b>: el modelo lo detecta y lo confirman la NOAA y el INSIVUMEH. "
+                     "La alerta para el grupo sería válida.")
+        elif conf:
+            falta = "INSIVUMEH" if conf == ["NOAA"] else "NOAA"
+            concl = (f"🟡 <b>Frente parcialmente confirmado</b>: el modelo lo detecta y lo confirma la {conf[0]}; "
+                     f"el {falta} todavía no lo menciona. Revisar antes de avisar al grupo.")
+        else:
+            concl = ("⚠️ <b>Sin confirmación</b>: solo el modelo detecta el frente; ni la NOAA ni el INSIVUMEH "
+                     "lo mencionan. Posible falsa alarma: no se avisaría al grupo.")
+        t_oficial = t_pron.replace("🇬🇹 <b>INSIVUMEH – Pronóstico diario oficial</b>",
+                                   "🇬🇹 <b>Confirmación oficial – INSIVUMEH</b> (pronóstico diario)")
+    else:
+        concl = "✅ <b>El modelo no detecta frente frío en Sipacate: no se emite ninguna alerta.</b>"
+        if noaa_si:
+            concl += ("\nℹ️ La NOAA menciona un frente en la región (ver arriba): solo para seguimiento, "
+                      "por si llega en los próximos días.")
+        if insiv_si:
+            concl += ("\nℹ️ El INSIVUMEH menciona frente o viento del norte en la costa, pero el modelo no lo ve: "
+                      "revisar si los criterios del modelo son muy estrictos.")
+        t_oficial = t_pron.replace("🇬🇹 <b>INSIVUMEH – Pronóstico diario oficial</b>",
+                                   "🇬🇹 <b>INSIVUMEH – Pronóstico diario</b> (solo revisión)")
+    resumen = "\n\n".join([x for x in [cab, t_ecmwf, t_noaa, t_oficial, t_insiv, "3️⃣ " + concl,
                            "🗺️ Abajo: gráfica del modelo, mapa de superficie de la NOAA "
                            "(frente frío = línea azul con triángulos) e imagen satelital del INSIVUMEH."] if x])
     textos = [resumen]
