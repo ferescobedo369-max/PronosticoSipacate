@@ -395,6 +395,15 @@ def main():
 
     for t in textos:
         print(t + "\n" + "-" * 60)
+    if os.environ.get("SOLO_MOSTRAR") == "1":           # copia liviana de las imágenes en el log, para revisión
+        import base64
+        from PIL import Image
+        for ruta, _ in fotos:
+            img = Image.open(ruta).convert("RGB")
+            img.thumbnail((1400, 1400))
+            buf = io.BytesIO()
+            img.save(buf, "JPEG", quality=70)
+            print(f"IMG_B64 {os.path.basename(ruta)} {base64.b64encode(buf.getvalue()).decode()}")
     enviar_validacion(textos, fotos)
 
 
