@@ -349,13 +349,14 @@ def texto_pronostico_insivumeh():
             if r.ok and r.content.startswith(b"%PDF"):
                 break
         if not r.ok or not r.content.startswith(b"%PDF"):
-            l.append(f"• No se pudo leer hoy (respuesta {r.status_code})")
+            l.append(f"• ⚠️ No se pudo leer hoy (respuesta {r.status_code}). ¿Cambió el enlace?")
             return "\n".join(l), False
+        print(f"Pronóstico INSIVUMEH: {r.url.split('?')[0]} · Last-Modified: {r.headers.get('Last-Modified')}")
         from pypdf import PdfReader
         txt = "\n".join((pg.extract_text() or "") for pg in PdfReader(io.BytesIO(r.content)).pages)
     except Exception as e:
         print(f"⚠ Pronóstico INSIVUMEH: {e!r}")
-        l.append("• No se pudo leer hoy")
+        l.append("• ⚠️ No se pudo leer hoy")
         return "\n".join(l), False
     if os.environ.get("SOLO_MOSTRAR") == "1":
         print("----- TEXTO PDF INSIVUMEH -----\n" + txt[:4000] + "\n----- FIN -----")
@@ -364,6 +365,15 @@ def texto_pronostico_insivumeh():
     fecha = re.search(r"\b\d{1,2} de [a-záéíóú]+ (de|del) 20\d\d\b", plano, re.I)
     l.append("• " + " · ".join(x for x in [num.group(0) if num else "",
                                            fecha.group(0).lower() if fecha else ""] if x))
+    # ¿Está al día? El boletín de mañana se publica la tarde anterior: debe ser de hoy o de mañana
+    MESES = {m: i for i, m in enumerate(["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
+                                         "septiembre", "octubre", "noviembre", "diciembre"], 1)}
+    if fecha:
+        d, mes, a = re.match(r"(\d{1,2}) de ([a-záéíóú]+) (?:de|del) (\d{4})", fecha.group(0), re.I).groups()
+        f_bol = pd.Timestamp(int(a), MESES.get(mes.lower(), 1), int(d), tz=TZ)
+        if f_bol < pd.Timestamp.now(tz=TZ).normalize():
+            l.append(f"• ⚠️ <b>El boletín es del {fecha.group(0).lower()}: no se ha actualizado.</b> "
+                     "Revisar si el INSIVUMEH cambió el enlace.")
     persp = re.search(r"Condiciones y perspectiva:\s*(.+?[.])", plano)
     if persp:
         l.append(f"• Perspectiva: <i>{html.escape(persp.group(1))}</i>")
