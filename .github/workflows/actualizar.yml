@@ -1,0 +1,99 @@
+name: Actualizacion Pronostico Sipacate
+
+on:
+  schedule:
+    # Objetivo: datos listos ~4:00 AM Guatemala, antes de Power BI (6:30) y Telegram (7:30).
+    # Programado 3:40 AM Guatemala = 9:40 UTC. Se evita la hora en punto (:00) porque
+    # GitHub atrasa mas esos horarios (en mayo, el de 5:00 llego a terminar hasta las 8:27).
+    - cron: '40 9 * * *'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+
+    steps:
+      - name: Evitar duplicados (si ya se lanzo a mano hoy)
+        id: guard
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          DESDE="$(TZ=America/Guatemala date +%F)T06:00:00Z"   # 00:00 hora Guatemala
+          N=$(gh api "repos/${{ github.repository }}/actions/workflows/actualizar.yml/runs?event=workflow_dispatch&created=>=$DESDE" \
+                --jq '[.workflow_runs[] | select(.conclusion=="success" or .status!="completed")] | length')
+          echo "Ejecuciones manuales hoy: $N"
+          if [ "$N" -gt 0 ]; then echo "duplicado=si" >> "$GITHUB_OUTPUT"; else echo "duplicado=no" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Descargar codigo
+        if: steps.guard.outputs.duplicado != 'si'
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Instalar Python
+        if: steps.guard.outputs.duplicado != 'si'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias del sistema
+        if: steps.guard.outputs.duplicado != 'si'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            libgdal-dev gdal-bin libspatialindex-dev \
+            libreoffice --no-install-recommends
+
+      - name: Instalar librerias Python
+        if: steps.guard.outputs.duplicado != 'si'
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Generar datos CSV
+        if: steps.guard.outputs.duplicado != 'si'
+        run: python 1_Median_and_average_conditions.py
+
+      - name: Generar mapas y graficas
+        if: steps.guard.outputs.duplicado != 'si'
+        run: python 3_Map_200.py
+
+      - name: Generar boletin PDF
+        if: steps.guard.outputs.duplicado != 'si'
+        run: python 4_Generar_Boletin.py
+
+      - name: Enviar boletin por correo
+        if: steps.guard.outputs.duplicado != 'si'
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_PASSWORD: ${{ secrets.GMAIL_PASSWORD }}
+          DESTINATARIOS: ${{ secrets.DESTINATARIOS }}
+        run: python 5_Enviar_Correo.py
+
+      - name: Guardar resultados en el repositorio
+        if: steps.guard.outputs.duplicado != 'si'
+        run: |
+          git config --global user.name 'actions-user'
+          git config --global user.email 'action@github.com'
+          git add 2_Results/
+          if git diff --staged --quiet; then
+            echo "Sin cambios que guardar"
+          else
+            git stash
+            git pull origin main --no-rebase
+            git stash pop
+            git add 2_Results/
+            git commit -m "Actualizacion automatica - $(TZ='America/Guatemala' date +'%Y-%m-%d %H:%M') hora Guatemala"
+            # Reintentos: a veces GitHub rechaza el push por un error momentaneo del servidor
+            for i in 1 2 3 4 5; do
+              if git push; then echo "Resultados guardados"; exit 0; fi
+              echo "Push fallo (intento $i de 5). Reintento en 30 s..."
+              sleep 30
+              git pull origin main --no-rebase --no-edit
+            done
+            echo "No se pudo guardar despues de 5 intentos"; exit 1
+          fi

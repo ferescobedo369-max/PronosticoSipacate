@@ -1,0 +1,39 @@
+name: Validacion Frentes Frios Sipacate
+
+# SOLO VALIDACION: envia el resumen (modelo ECMWF + NOAA) unicamente a los chats
+# personales del secret TELEGRAM_CHAT_ID. No envia al grupo ni guarda nada en el repo.
+# Corre al subir cambios a la rama validacion-frentes, o cuando la tarea programada
+# de Claude lo lanza cada manana (workflow_dispatch con ref=validacion-frentes).
+on:
+  push:
+    branches: [validacion-frentes]
+  workflow_dispatch:
+
+jobs:
+  validacion:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Descargar codigo
+        uses: actions/checkout@v4
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar librerias Python
+        run: |
+          pip install --upgrade pip
+          pip install geopandas shapely numpy pandas requests matplotlib pillow \
+            openmeteo-requests requests-cache retry-requests cryptography
+
+      - name: Enviar validacion a chat personal
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          OPENMETEO_APIKEY: ${{ secrets.OPENMETEO_APIKEY }}
+        run: python 8_Validacion_Frentes.py

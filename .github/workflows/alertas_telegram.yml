@@ -1,0 +1,87 @@
+name: Alertas Viento Telegram Sipacate
+
+# Workflow SEPARADO del boletin: no toca 2_Results ni Power BI.
+# - schedule: mensaje diario. GitHub suele atrasar los horarios, por eso se programa
+#   a las 5:55 AM Guatemala (11:55 UTC) y el script ESPERA hasta las 7:30 para enviar.
+#   OJO: GitHub solo ejecuta 'schedule' desde la rama principal (main).
+# - push a 'alertas': pruebas (envia de inmediato, sin esperar).
+on:
+  schedule:
+    - cron: '55 11 * * *'
+  push:
+    branches: [alertas, frentes-frios]
+    paths:                       # solo si cambia el script de alertas o este workflow
+      - '6_Alertas_Telegram.py'
+      - '.github/workflows/alertas_telegram.yml'
+  workflow_dispatch:
+    inputs:
+      esperar_hasta:
+        description: 'Hora de Guatemala para enviar (ej. 07:30). Vacio = enviar de inmediato'
+        required: false
+        default: ''
+
+jobs:
+  alertas:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      actions: read
+      contents: write
+
+    steps:
+      - name: Evitar duplicados (si ya se lanzo a mano hoy)
+        id: guard
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          DESDE="$(TZ=America/Guatemala date +%F)T06:00:00Z"   # 00:00 hora Guatemala
+          N=$(gh api "repos/${{ github.repository }}/actions/workflows/alertas_telegram.yml/runs?event=workflow_dispatch&created=>=$DESDE" \
+                --jq '[.workflow_runs[] | select(.conclusion=="success" or .status!="completed")] | length')
+          echo "Ejecuciones manuales hoy: $N"
+          if [ "$N" -gt 0 ]; then echo "duplicado=si" >> "$GITHUB_OUTPUT"; else echo "duplicado=no" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Descargar codigo
+        if: steps.guard.outputs.duplicado != 'si'
+        uses: actions/checkout@v4
+
+      - name: Instalar Python
+        if: steps.guard.outputs.duplicado != 'si'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar librerias Python
+        if: steps.guard.outputs.duplicado != 'si'
+        run: |
+          pip install --upgrade pip
+          pip install geopandas shapely numpy pandas requests \
+            openmeteo-requests requests-cache retry-requests cryptography
+
+      - name: Enviar alertas por Telegram
+        if: steps.guard.outputs.duplicado != 'si'
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          OPENMETEO_APIKEY: ${{ secrets.OPENMETEO_APIKEY }}
+          # Solo la ejecucion programada espera a las 7:30
+          ESPERAR_HASTA: ${{ github.event_name == 'schedule' && '07:30' || inputs.esperar_hasta || '' }}
+          # La lista de suscriptores solo se guarda desde main (las pruebas no la modifican)
+          GUARDAR_SUSCRIPTORES: ${{ github.ref == 'refs/heads/main' && '1' || '' }}
+          # En la rama frentes-frios solo se muestra el mensaje en el log (no se envia)
+          SOLO_MOSTRAR: ${{ github.ref == 'refs/heads/frentes-frios' && '1' || '' }}
+        run: python 6_Alertas_Telegram.py
+
+      - name: Guardar lista de suscriptores (cifrada)
+        if: ${{ !cancelled() && steps.guard.outputs.duplicado != 'si' && github.ref == 'refs/heads/main' }}
+        run: |
+          git add 3_Suscriptores/ 2>/dev/null || true
+          if git diff --staged --quiet; then echo "Sin cambios en la lista de suscriptores"; exit 0; fi
+          git config --global user.name 'actions-user'
+          git config --global user.email 'action@github.com'
+          git commit -m "Actualizar lista de suscriptores de Telegram [skip ci]"
+          for i in 1 2 3 4 5; do
+            if git pull origin main --rebase --autostash && git push; then echo "Lista guardada"; exit 0; fi
+            echo "Push fallo (intento $i de 5). Reintento en 30 s..."; sleep 30
+          done
+          echo "No se pudo guardar la lista"; exit 1
