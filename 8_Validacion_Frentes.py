@@ -172,21 +172,85 @@ GLOSARIO = [
 
 
 def traducir(frase):
-    """Traducción automática al español (Google, sin clave). Si falla, devuelve None."""
+    """Traducción automática completa (Google y, si falla, MyMemory). Devuelve None si no hay servicio."""
     try:
-        from deep_translator import GoogleTranslator
-        t = GoogleTranslator(source="en", target="es").translate(frase)
-        for patron, rep in GLOSARIO:
-            t = re.sub(patron, rep, t, flags=re.I)
-        return t
-    except Exception as e:
-        print(f"⚠ No se pudo traducir: {e!r}")
+        from deep_translator import GoogleTranslator, MyMemoryTranslator
+    except Exception:
         return None
+    for nombre, tr in [("Google", lambda: GoogleTranslator(source="en", target="es")),
+                       ("MyMemory", lambda: MyMemoryTranslator(source="en-US", target="es-ES"))]:
+        try:
+            t = tr().translate(frase)
+            if t and t.strip().lower() != frase.strip().lower():
+                for patron, rep in GLOSARIO:
+                    t = re.sub(patron, rep, t, flags=re.I)
+                return t
+        except Exception as e:
+            print(f"⚠ Traducción {nombre} no disponible: {e!r}")
+    return None
+
+
+# Resumen en español hecho por el script (no depende de servicios externos)
+_FENOMENOS = [("tehuantepec", "Vientos del norte en el Golfo de Tehuantepec"),
+              ("cold front", "Frente frío"), ("stationary front", "Frente estacionario"),
+              ("stalled front", "Frente estancado"), ("frontal boundary", "Frente")]
+_LUGARES = [("bay of campeche", "Bahía de Campeche"), ("yucatan", "Península de Yucatán"),
+            ("sw gulf", "suroeste del Golfo de México"), ("southwest gulf", "suroeste del Golfo de México"),
+            ("se gulf", "sureste del Golfo de México"), ("nw gulf", "noroeste del Golfo de México"),
+            ("ne gulf", "noreste del Golfo de México"), ("northeastern gulf", "noreste del Golfo de México"),
+            ("gulf of tehuantepec", None), ("gulf", "Golfo de México"),
+            ("central america", "Centroamérica"), ("guatemala", "Guatemala"), ("honduras", "Honduras"),
+            ("belize", "Belice"), ("caribbean", "Caribe"), ("mexico", "México"), ("florida", "Florida"),
+            ("texas", "Texas"), ("louisiana", "Luisiana")]
+_MOVIMIENTO = [("southeastward", "avanzando hacia el sureste"), ("southward", "avanzando hacia el sur"),
+               ("move se", "avanzando hacia el sureste"), ("move s ", "avanzando hacia el sur"),
+               ("push south", "avanzando hacia el sur"), ("stall", "casi sin moverse"),
+               ("dissipate", "debilitándose"), ("weaken", "debilitándose")]
+_FUERZA = [("gale", "con vientos de temporal (más de 60 km/h)"),
+           ("fresh to strong", "con vientos moderados a fuertes"), ("strong", "con vientos fuertes"),
+           ("fresh", "con vientos moderados a fuertes")]
+_CUANDO = [("tonight", "esta noche"), ("this weekend", "este fin de semana"),
+           ("early next week", "hasta inicios de la próxima semana"), ("next week", "la próxima semana"),
+           ("monday", "lunes"), ("tuesday", "martes"), ("wednesday", "miércoles"), ("thursday", "jueves"),
+           ("friday", "viernes"), ("saturday", "sábado"), ("sunday", "domingo"),
+           ("tomorrow", "mañana"), ("today", "hoy")]
+
+
+def resumen_es(frase):
+    fl = " " + frase.lower() + " "
+    fen = next((es for en, es in _FENOMENOS if en in fl), "Frente")
+    lugares = []
+    for en, es in _LUGARES:
+        if en in fl:
+            if es and es not in lugares and not any(es in x for x in lugares):
+                lugares.append(es)
+            fl = fl.replace(en, " ")
+    fl2 = " " + frase.lower() + " "
+    mov = next((es for en, es in _MOVIMIENTO if en in fl2), "")
+    fuerza = next((es for en, es in _FUERZA if en in fl2), "")
+    cuando = []
+    for en, es in _CUANDO:
+        if re.search(r"\b" + en + r"\b", fl2) and es not in cuando:
+            cuando.append(es)
+            fl2 = re.sub(r"\b" + en + r"\b", " ", fl2)
+    lugares = [("el " + x) if x.split()[0] in ("noreste", "noroeste", "sureste", "suroeste") else x
+               for x in lugares]
+    txt = fen
+    if lugares and "Tehuantepec" not in fen:
+        txt += " en " + ", ".join(lugares[:3])
+    elif lugares:
+        txt += " (por un frente en " + ", ".join(lugares[:2]) + ")"
+    for x in (mov, fuerza):
+        if x:
+            txt += ", " + x
+    if cuando:
+        txt += " — " + ", ".join(cuando[:3])
+    return txt
 
 
 def texto_noaa():
-    l = ["2️⃣ <b>NOAA – Discusión del Trópico</b> (meteorólogos del Centro Nacional de Huracanes; "
-         "traducción automática, toca «Original» para ver el texto en inglés)"]
+    l = ["2️⃣ <b>NOAA – Discusión del Trópico</b> (meteorólogos del Centro Nacional de Huracanes). "
+         "Resumen en español; toca el recuadro para ver la traducción y el texto original."]
     hay = False
     for nombre, urls in URLS_TWD.items():
         txt, u = leer_twd(urls)
@@ -199,12 +263,10 @@ def texto_noaa():
         if fr:
             hay = True
             for f in fr[:4]:
+                l.append(f"   ▸ <b>{html.escape(resumen_es(f))}</b>")
                 es = traducir(f)
-                if es:
-                    l.append(f"   « {html.escape(es)} »")
-                    l.append(f"<blockquote expandable>Original: {html.escape(f)}</blockquote>")
-                else:
-                    l.append(f"   « {html.escape(f)} » (en inglés)")
+                detalle = (f"Traducción: {html.escape(es)}\n\n" if es else "") + f"Original: {html.escape(f)}"
+                l.append(f"<blockquote expandable>{detalle}</blockquote>")
         else:
             l.append("   sin menciones de frentes fríos cerca de la región")
     l.append("→ " + ("<b>La NOAA menciona frentes fríos cerca de la región</b>" if hay

@@ -8,6 +8,11 @@ on:
   push:
     branches: [validacion-frentes]
   workflow_dispatch:
+    inputs:
+      solo_mostrar:
+        description: '1 = solo mostrar en el log, sin enviar a Telegram'
+        required: false
+        default: ''
 
 jobs:
   validacion:
@@ -36,4 +41,5 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           OPENMETEO_APIKEY: ${{ secrets.OPENMETEO_APIKEY }}
+          SOLO_MOSTRAR: ${{ inputs.solo_mostrar }}
         run: python 8_Validacion_Frentes.py
