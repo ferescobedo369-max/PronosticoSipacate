@@ -339,7 +339,15 @@ def texto_pronostico_insivumeh():
     import requests
     l = ["🇬🇹 <b>INSIVUMEH – Pronóstico diario oficial</b>"]
     try:
-        r = requests.get(f"{URL_PRONOSTICO_INSIVUMEH}?t={int(time.time() * 1000)}", headers=UA, timeout=60)
+        # La carpeta podría cambiar con el mes (Papa_Noviembre, Papa_Diciembre...): se prueba primero la del mes
+        meses = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre",
+                 "Octubre", "Noviembre", "Diciembre"]
+        mes = meses[pd.Timestamp.now(tz=TZ).month - 1]
+        urls = [URL_PRONOSTICO_INSIVUMEH.replace("Papa_Noviembre", f"Papa_{mes}"), URL_PRONOSTICO_INSIVUMEH]
+        for u in dict.fromkeys(urls):
+            r = requests.get(f"{u}?t={int(time.time() * 1000)}", headers=UA, timeout=60)
+            if r.ok and r.content.startswith(b"%PDF"):
+                break
         if not r.ok or not r.content.startswith(b"%PDF"):
             l.append(f"• No se pudo leer hoy (respuesta {r.status_code})")
             return "\n".join(l), False
