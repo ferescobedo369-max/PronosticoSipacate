@@ -33,6 +33,9 @@ TZ = al.TZ
 URL_MAPA_NOAA = "https://www.nhc.noaa.gov/tafb_latest/USA_latest.gif"
 URL_SAT_INSIVUMEH = "https://insivumeh.gob.gt/img/guate_truecolor.png"        # GOES-19 color verdadero
 URL_BOLETIN_INSIVUMEH = "https://insivumeh.gob.gt/img/Papa_Bravo/Papa_iFoxtrot/Boletin_Informativo.pdf"
+# El boletín PDF del INSIVUMEH (nov-2026) es del 23-abr y casi no tiene texto (es imagen):
+# se deja apagado hasta encontrar una fuente de texto que se actualice.
+USAR_BOLETIN_INSIVUMEH = False
 CLAVES_INSIVUMEH = ["frente frío", "frente frio", "empuje de aire frío", "empuje de aire frio", "aire frío",
                     "vientos del norte", "viento del norte", "nortes", "alta presión", "alta presion"]
 URLS_TWD = {
@@ -360,7 +363,7 @@ def main():
 
     t_ecmwf = texto_ecmwf(resumen_diario(area, hoy), ev)
     t_noaa, noaa_si = texto_noaa()
-    t_insiv, _ = texto_insivumeh()
+    t_insiv = texto_insivumeh()[0] if USAR_BOLETIN_INSIVUMEH else None
 
     if ev and noaa_si:
         concl = "✅ <b>Coinciden</b>: el modelo y la NOAA indican frente frío."
@@ -373,9 +376,9 @@ def main():
 
     cab = (f"🧪 <b>VALIDACIÓN FRENTES FRÍOS</b> – {al.fecha_txt(ahora)} {ahora:%H:%M}\n"
            "<i>Solo para revisión: esto NO se envió al grupo.</i>")
-    resumen = "\n\n".join([cab, t_ecmwf, t_noaa, t_insiv, "3️⃣ " + concl,
+    resumen = "\n\n".join([x for x in [cab, t_ecmwf, t_noaa, t_insiv, "3️⃣ " + concl,
                            "🗺️ Abajo: gráfica del modelo, mapa de superficie de la NOAA "
-                           "(frente frío = línea azul con triángulos) e imagen satelital del INSIVUMEH."])
+                           "(frente frío = línea azul con triángulos) e imagen satelital del INSIVUMEH."] if x])
     textos = [resumen]
     if ev:
         textos.append("👇 <b>Vista previa de la alerta para el grupo</b> (no enviada):\n\n"
