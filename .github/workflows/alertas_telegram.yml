@@ -9,7 +9,7 @@ on:
   schedule:
     - cron: '55 11 * * *'
   push:
-    branches: [alertas]
+    branches: [alertas, frentes-frios]
     paths:                       # solo si cambia el script de alertas o este workflow
       - '6_Alertas_Telegram.py'
       - '.github/workflows/alertas_telegram.yml'
@@ -68,6 +68,8 @@ jobs:
           ESPERAR_HASTA: ${{ github.event_name == 'schedule' && '07:30' || inputs.esperar_hasta || '' }}
           # La lista de suscriptores solo se guarda desde main (las pruebas no la modifican)
           GUARDAR_SUSCRIPTORES: ${{ github.ref == 'refs/heads/main' && '1' || '' }}
+          # En la rama frentes-frios solo se muestra el mensaje en el log (no se envia)
+          SOLO_MOSTRAR: ${{ github.ref == 'refs/heads/frentes-frios' && '1' || '' }}
         run: python 6_Alertas_Telegram.py
 
       - name: Guardar lista de suscriptores (cifrada)

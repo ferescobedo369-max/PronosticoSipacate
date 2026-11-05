@@ -48,11 +48,16 @@ HORA_QUEMA = (12, 16)       # ventana acordada en la mesa: 12:00 a 16:00 (inclus
 DIR_DESFAVORABLE = (292.5, 67.5)
 
 # Criterios para "posible frente frío / norte" (heurístico, calibrar con INSIVUMEH)
-FF_SECTOR_NORTE = (315.0, 45.0)  # viento que viene del NO, N o NE
-FF_HORAS_NORTE = 6               # horas mínimas del día con viento del norte
+FF_SECTOR_NORTE = (315.0, 45.0)  # viento que viene del NO, N o NE (va hacia SE, S o SO)
 FF_VIENTO_MIN = 12.0             # km/h: no cuenta la brisa terrestre débil de la madrugada
-FF_SUBIDA_PRESION = 2.0          # hPa, subida de presión media respecto al día anterior
-FF_BAJADA_TEMP = 1.5             # °C, bajada de temperatura media respecto al día anterior
+FF_HORAS_SEGUIDAS = 4            # horas seguidas de viento del norte para marcar el ingreso
+FF_HORAS_NORTE = 6               # horas totales mínimas de viento del norte durante el evento
+FF_PAUSA_MAX = 12                # h: pausas más cortas no cortan el evento
+FF_SUBIDA_PRESION = 2.0          # hPa que sube la presión respecto a las 24 h previas
+FF_BAJADA_TEMP = 1.5             # °C que baja la temperatura mínima respecto a días anteriores
+FF_DIAS_ADELANTE = 5             # días hacia adelante en que se busca el ingreso del frente
+
+DIAS_MENSAJE = 3                 # días que muestra el mensaje diario
 
 SOLO_SI_HAY_ALERTA = False  # True = no envía nada en días sin alertas
 LINK_PRONOSTICO = "https://app.powerbi.com/view?r=eyJrIjoiNGRkMzFlZjMtMzViZi00MjhiLWEzNDYtYzQ3MTEzNWRmNDhhIiwidCI6Ijg5MTkwMzQ4LTg5MjUtNDQxOS1hNTZhLTE3ZDIxOGE3YzgwYyIsImMiOjR9"  # Power BI; vacío = no se muestra
@@ -139,7 +144,7 @@ def descargar(puntos):
                     retries=5, backoff_factor=0.2)
     client = openmeteo_requests.Client(session=session)
 
-    variables = ["temperature_2m", "pressure_msl",
+    variables = ["temperature_2m", "pressure_msl", "relative_humidity_2m",
                  "wind_speed_10m", "wind_direction_10m",
                  "wind_speed_100m", "wind_direction_100m",
                  "wind_gusts_10m"]
@@ -148,8 +153,8 @@ def descargar(puntos):
         "longitude": [p[1] for p in puntos],
         "hourly": variables,
         "models": "ecmwf_ifs",
-        "past_days": 1,          # ayer: referencia para detectar frentes fríos
-        "forecast_days": 3,
+        "past_days": 2,          # referencia para detectar frentes fríos
+        "forecast_days": FF_DIAS_ADELANTE + 1,
         "timezone": TZ,
         "wind_speed_unit": "kmh",
     }
@@ -199,6 +204,8 @@ def resumir_area(df_all):
     })
     # Dirección DE DONDE VIENE, a partir del vector medio (evita el error 350°+10° = 180°)
     area["direccion"] = (np.rad2deg(np.arctan2(-area["u"], -area["v"])) + 360) % 360
+    if "relative_humidity_2m" in df_all:
+        area["humedad"] = g["relative_humidity_2m"].mean()
     area = area.drop(columns=["u", "v"]).reset_index()
     area["dia"] = area["date"].dt.normalize()
     area["hora"] = area["date"].dt.hour
@@ -211,28 +218,101 @@ def resumir_area(df_all):
 # =============================================================
 # 3. Evaluación y mensaje
 # =============================================================
-def detectar_frente_frio(area):
-    """Devuelve {dia: texto} con los días que muestran señales de frente frío."""
-    diario = area.groupby("dia").agg(presion=("presion", "mean"), temp=("temp", "mean"))
-    norte = area[en_sector(area["direccion"], FF_SECTOR_NORTE) & (area["viento"] >= FF_VIENTO_MIN)]
-    diario["horas_norte"] = norte.groupby("dia").size()
-    diario["horas_norte"] = diario["horas_norte"].fillna(0).astype(int)
-    diario["dp"] = diario["presion"].diff()
-    diario["dt"] = diario["temp"].diff()
+def detectar_frente_frio(area, ahora):
+    """Busca el ingreso de un frente frío (desde ayer hasta FF_DIAS_ADELANTE días).
+    Señales: varias horas seguidas de viento del norte (hacia el mar y las salineras)
+    + subida de presión y/o baja de temperatura. Devuelve un dict o None."""
+    a = area.sort_values("date").reset_index(drop=True)
+    a["norte"] = en_sector(a["direccion"], FF_SECTOR_NORTE) & (a["viento"] >= FF_VIENTO_MIN)
+    tramo = (a["norte"] != a["norte"].shift()).cumsum()
+    norte = a[a["norte"]]
+    limite = ahora + pd.Timedelta(days=FF_DIAS_ADELANTE)
+    usados_hasta = None
 
-    res = {}
-    for dia, r in diario.iterrows():
-        if pd.isna(r["dp"]):
+    for _, b in norte.groupby(tramo[a["norte"]]):
+        ini = b["date"].iloc[0]
+        if len(b) < FF_HORAS_SEGUIDAS or ini > limite:
             continue
-        señales = []
-        if r["dp"] >= FF_SUBIDA_PRESION:
-            señales.append(f"presión sube {r['dp']:.1f} hPa")
-        if r["dt"] <= -FF_BAJADA_TEMP:
-            señales.append(f"temperatura baja {abs(r['dt']):.1f} °C")
-        if r["horas_norte"] >= FF_HORAS_NORTE and señales:
-            res[dia] = (f"{int(r['horas_norte'])} h con viento del norte (hacia el mar); "
-                        + ", ".join(señales))
-    return res
+        if usados_hasta is not None and ini <= usados_hasta:
+            continue
+        # Fin del evento: se extiende mientras las pausas sin viento del norte sean cortas
+        fin = b["date"].iloc[-1]
+        for t in norte["date"][norte["date"] > fin]:
+            if (t - fin) <= pd.Timedelta(hours=FF_PAUSA_MAX):
+                fin = t
+            else:
+                break
+        usados_hasta = fin
+        if fin < ahora:
+            continue                                  # ya terminó
+        dur = a[(a["date"] >= ini) & (a["date"] <= fin)]
+        horas_norte = dur[dur["norte"]]
+        if len(horas_norte) < FF_HORAS_NORTE:
+            continue
+        antes = a[(a["date"] >= ini - pd.Timedelta(hours=24)) & (a["date"] < ini)]
+        d0 = ini.normalize()
+        ref = a[(a["dia"] < d0) & (a["dia"] >= d0 - pd.Timedelta(days=2))]
+        if antes.empty or ref.empty:
+            continue
+        dp = dur["presion"].max() - antes["presion"].mean()
+        tmin = dur["temp"].min()
+        baja_t = ref.groupby("dia")["temp"].min().mean() - tmin
+        if dp < FF_SUBIDA_PRESION and baja_t < FF_BAJADA_TEMP:
+            continue                                  # viento del norte sin señales de frente
+        desde = max(ini, ahora)
+        horas = max(1, (fin - desde).total_seconds() / 3600)
+        return {
+            "inicio": ini, "fin": fin, "en_curso": ini <= ahora,
+            "horas": int(np.ceil(horas / 24) * 24),
+            "rumbo": rumbo_txt(horas_norte),
+            "viento": horas_norte["viento"].mean(),
+            "rafaga": dur["rafaga"].max(),
+            "tmin": tmin, "baja_t": baja_t, "dp": dp,
+            "humedad": dur["humedad"].min() if "humedad" in dur else None,
+        }
+    return None
+
+
+def mensaje_frente_frio(ev, ahora):
+    """Texto de la alerta de frente frío (revisado y aprobado por el ICC)."""
+    ini = ev["inicio"]
+    cuando = f"{fecha_txt(ini)[0].lower()}{fecha_txt(ini)[1:]}, alrededor de las {ini.hour:02d}:00"
+    if ev["en_curso"]:
+        titulo = "🌬️ <b>INFLUENCIA DE FRENTE FRÍO</b>"
+        intro = (f"Se mantiene la influencia del frente frío que ingresó el <b>{cuando}</b>, con posibles "
+                 "condiciones adversas para las quemas de caña de azúcar en Sipacate y su zona buffer.")
+    else:
+        titulo = "🌬️ <b>POSIBLE INGRESO DE FRENTE FRÍO</b>"
+        intro = (f"Se prevé que a partir del <b>{cuando}</b>, ingrese un frente frío, con posibles "
+                 "condiciones adversas para las quemas de caña de azúcar en Sipacate y su zona buffer.")
+    pronto = ev["en_curso"] or (ini - ahora) <= pd.Timedelta(hours=24)
+    durante = "durante las próximas" if pronto else "durante unas"
+
+    l = [titulo, "<b>Perspectiva climática -Sipacate-</b>", "",
+         "⛔ <b>Condiciones adversas para las quemas</b>", intro, "",
+         "⚠️ <b>Alerta de condiciones</b>",
+         f"• <b>Duración:</b> se estima que {durante} <b>{ev['horas']} horas</b> predominen vientos "
+         f"con dirección <b>hacia el {ev['rumbo']}</b>.",
+         f"• <b>Viento:</b> velocidad promedio de <b>{ev['viento']:.0f} km/h</b> y ráfagas de hasta "
+         f"<b>{ev['rafaga']:.0f} km/h</b>."]
+    t = f"• <b>Temperatura:</b> podría descender hasta <b>{ev['tmin']:.0f} °C</b>"
+    if ev["baja_t"] >= 1:
+        t += f", unos {ev['baja_t']:.0f} °C menos que en días anteriores"
+    l.append(t + ".")
+    if ev.get("humedad") is not None and not np.isnan(ev["humedad"]):
+        l.append(f"• <b>Humedad relativa:</b> podría bajar hasta <b>{ev['humedad']:.0f} %</b>.")
+    if ev["dp"] >= 1:
+        l.append(f"• <b>Presión atmosférica:</b> aumento de <b>{ev['dp']:.0f} hPa</b>, "
+                 "una señal típica del ingreso del frente.")
+    l += ["",
+          "📌 <b>Recomendación:</b> seguir las instrucciones emitidas por <b>ASAZGUA</b> al momento "
+          "de realizar cualquier quema durante el día.", "",
+          "🔎 El <b>ICC</b> dará seguimiento a este fenómeno y a la evolución de las condiciones "
+          "atmosféricas. Manténgase atento a este grupo para las actualizaciones."]
+    if LINK_PRONOSTICO:
+        l += ["", "📊 Para mayor información sobre las proyecciones de velocidad y dirección de viento, "
+                  "consulte el siguiente enlace:", html.escape(LINK_PRONOSTICO)]
+    return "\n".join(l)
 
 
 def rumbo_txt(b):
@@ -258,9 +338,8 @@ def alerta_txt(b):
             f"riesgo de pavesa en salineras")
 
 
-def construir_mensaje(area, hoy):
-    frentes = detectar_frente_frio(area)   # usa también el día anterior como referencia
-    area = area[area["dia"] >= hoy]
+def construir_mensaje(area, hoy, frente=None):
+    area = area[(area["dia"] >= hoy) & (area["dia"] < hoy + pd.Timedelta(days=DIAS_MENSAJE))]
     lineas = ["🔥 <b>Perspectiva climática -Sipacate-</b>",
               "<i>Favorable: viento hacia el norte, noreste, noroeste, este u oeste. "
               "Desfavorable: hacia el sur, sureste o suroeste. "
@@ -304,9 +383,9 @@ def construir_mensaje(area, hoy):
         if cambios:
             lineas.append("  🔄 Cambio de dirección de viento: " + " · ".join(cambios))
 
-        if dia in frentes:
+        if frente and frente["inicio"].normalize() <= dia <= frente["fin"].normalize():
             hay_alerta = True
-            lineas.append(f"  🌬️ <b>Posible influencia de frente frío</b>: {html.escape(frentes[dia])}")
+            lineas.append("  🌬️ <b>Posible influencia de frente frío</b> (ver alerta aparte)")
 
     if LINK_PRONOSTICO:
         lineas += ["",
@@ -409,7 +488,7 @@ def registrar_nuevos(api, subs):
     return nuevos
 
 
-def enviar_telegram(texto):
+def enviar_telegram(*textos):
     import re
     import json
     token = _token()
@@ -427,17 +506,18 @@ def enviar_telegram(texto):
     # 1) Destinos fijos (grupo y chats del secret): si fallan, el workflow falla
     errores = []
     for chat in fijos:
-        r = enviar(chat, texto)
-        if r.get("ok"):
-            print(f"✓ Mensaje enviado a {chat}")
-        else:
-            print(f"✗ Error con {chat}: {r['_status']} {r.get('description')}")
-            errores.append(chat)
+        for n, texto in enumerate(textos, 1):
+            r = enviar(chat, texto)
+            if r.get("ok"):
+                print(f"✓ Mensaje {n} enviado a {chat}")
+            else:
+                print(f"✗ Error con {chat} (mensaje {n}): {r['_status']} {r.get('description')}")
+                errores.append(chat)
 
     # 2) Suscriptores: quienes tocaron Iniciar y siguen en el grupo.
     #    Si algo falla aquí, no afecta los envíos fijos de arriba.
     try:
-        enviar_suscriptores(api, token, texto, fijos, grupo, enviar)
+        enviar_suscriptores(api, token, textos, fijos, grupo, enviar)
     except Exception as e:
         print(f"⚠ Error en el envío a suscriptores (el grupo sí recibió el mensaje): {e!r}")
 
@@ -445,7 +525,7 @@ def enviar_telegram(texto):
         raise RuntimeError(f"No se pudo enviar a: {', '.join(errores)}")
 
 
-def enviar_suscriptores(api, token, texto, fijos, grupo, enviar):
+def enviar_suscriptores(api, token, textos, fijos, grupo, enviar):
     import json
     subs = cargar_suscriptores(token)
     antes = json.dumps(subs, sort_keys=True)
@@ -462,7 +542,10 @@ def enviar_suscriptores(api, token, texto, fijos, grupo, enviar):
         if cid in nuevos:
             enviar(cid, "✅ Quedaste registrado en la <b>Perspectiva climática -Sipacate-</b>. "
                         "Desde hoy recibirás aquí el pronóstico diario.")
-        r = enviar(cid, texto)
+        for texto in textos:
+            r = enviar(cid, texto)
+            if not r.get("ok"):
+                break
         if r.get("ok"):
             enviados += 1
         elif r["_status"] == 403:                      # bloqueó el bot o borró el chat
@@ -486,15 +569,26 @@ def main():
     print(f"Usando {len(puntos)} puntos dentro del área.")
     area = resumir_area(descargar(puntos))
 
-    hoy = pd.Timestamp.now(tz=TZ).normalize()
-    texto, hay_alerta = construir_mensaje(area, hoy)
+    ahora = pd.Timestamp.now(tz=TZ)
+    hoy = ahora.normalize()
+    frente = detectar_frente_frio(area, ahora)
+    texto, hay_alerta = construir_mensaje(area, hoy, frente)
+    textos = [texto]
     print(texto)
+    if frente:
+        textos.append(mensaje_frente_frio(frente, ahora))
+        print("\n" + "=" * 60 + "\n" + textos[-1])
+    else:
+        print("\n(Sin señales de frente frío en los próximos días)")
 
+    if os.environ.get("SOLO_MOSTRAR") == "1":
+        print("\nSOLO_MOSTRAR=1: no se envía nada (modo revisión).")
+        return
     if SOLO_SI_HAY_ALERTA and not hay_alerta:
         print("Sin alertas: no se envía mensaje.")
         return
     esperar_hasta(os.environ.get("ESPERAR_HASTA", ""))
-    enviar_telegram(texto)
+    enviar_telegram(*textos)
 
 
 def esperar_hasta(hora_txt):
