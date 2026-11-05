@@ -162,8 +162,31 @@ def emision_twd(txt):
     return ""
 
 
+# Términos de la NOAA que la traducción automática suele dejar mal
+GLOSARIO = [
+    (r"Golfo de Am[eé]rica", "Golfo de México"),
+    (r"vientos? de (brecha|hueco|espacio)", "vientos de paso (gap winds)"),
+    (r"límite frontal estancado", "frente estancado"),
+    (r"\bfrente frio\b", "frente frío"),
+]
+
+
+def traducir(frase):
+    """Traducción automática al español (Google, sin clave). Si falla, devuelve None."""
+    try:
+        from deep_translator import GoogleTranslator
+        t = GoogleTranslator(source="en", target="es").translate(frase)
+        for patron, rep in GLOSARIO:
+            t = re.sub(patron, rep, t, flags=re.I)
+        return t
+    except Exception as e:
+        print(f"⚠ No se pudo traducir: {e!r}")
+        return None
+
+
 def texto_noaa():
-    l = ["2️⃣ <b>NOAA – Tropical Weather Discussion</b> (texto de meteorólogos, en inglés)"]
+    l = ["2️⃣ <b>NOAA – Discusión del Trópico</b> (meteorólogos del Centro Nacional de Huracanes; "
+         "traducción automática, toca «Original» para ver el texto en inglés)"]
     hay = False
     for nombre, urls in URLS_TWD.items():
         txt, u = leer_twd(urls)
@@ -176,7 +199,12 @@ def texto_noaa():
         if fr:
             hay = True
             for f in fr[:4]:
-                l.append(f"   « {html.escape(f)} »")
+                es = traducir(f)
+                if es:
+                    l.append(f"   « {html.escape(es)} »")
+                    l.append(f"<blockquote expandable>Original: {html.escape(f)}</blockquote>")
+                else:
+                    l.append(f"   « {html.escape(f)} » (en inglés)")
         else:
             l.append("   sin menciones de frentes fríos cerca de la región")
     l.append("→ " + ("<b>La NOAA menciona frentes fríos cerca de la región</b>" if hay

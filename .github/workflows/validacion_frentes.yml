@@ -28,7 +28,7 @@ jobs:
       - name: Instalar librerias Python
         run: |
           pip install --upgrade pip
-          pip install geopandas shapely numpy pandas requests matplotlib pillow \
+          pip install geopandas shapely numpy pandas requests matplotlib pillow deep-translator \
             openmeteo-requests requests-cache retry-requests cryptography
 
       - name: Enviar validacion a chat personal
