@@ -33,6 +33,7 @@ TZ = al.TZ
 URL_MAPA_NOAA = "https://www.nhc.noaa.gov/tafb_latest/USA_latest.gif"
 URL_SAT_INSIVUMEH = "https://insivumeh.gob.gt/img/guate_truecolor.png"        # GOES-19 color verdadero
 URL_BOLETIN_INSIVUMEH = "https://insivumeh.gob.gt/img/Papa_Bravo/Papa_iFoxtrot/Boletin_Informativo.pdf"
+URL_PRONOSTICO_INSIVUMEH = "https://insivumeh.gob.gt/img/Papa_Bravo/Papa_Noviembre/pronostico_diario.pdf"
 # El boletín PDF del INSIVUMEH (nov-2026) es del 23-abr y casi no tiene texto (es imagen):
 # se deja apagado hasta encontrar una fuente de texto que se actualice.
 USAR_BOLETIN_INSIVUMEH = False
@@ -331,6 +332,43 @@ def texto_insivumeh():
     return "\n".join(l), bool(frases)
 
 
+def texto_pronostico_insivumeh():
+    """Pronóstico diario oficial del INSIVUMEH (PDF con texto): número, fecha,
+    menciones de frentes fríos / nortes y la región Pacífico (Escuintla)."""
+    import time
+    import requests
+    l = ["🇬🇹 <b>INSIVUMEH – Pronóstico diario oficial</b>"]
+    try:
+        r = requests.get(f"{URL_PRONOSTICO_INSIVUMEH}?t={int(time.time() * 1000)}", headers=UA, timeout=60)
+        if not r.ok or not r.content.startswith(b"%PDF"):
+            l.append(f"• No se pudo leer hoy (respuesta {r.status_code})")
+            return "\n".join(l), False
+        from pypdf import PdfReader
+        txt = "\n".join((pg.extract_text() or "") for pg in PdfReader(io.BytesIO(r.content)).pages)
+    except Exception as e:
+        print(f"⚠ Pronóstico INSIVUMEH: {e!r}")
+        l.append("• No se pudo leer hoy")
+        return "\n".join(l), False
+    if os.environ.get("SOLO_MOSTRAR") == "1":
+        print("----- TEXTO PDF INSIVUMEH -----\n" + txt[:4000] + "\n----- FIN -----")
+    plano = re.sub(r"\s+", " ", txt)
+    num = re.search(r"\bBD\s?\d+-20\d\d\b", plano)
+    fecha = re.search(r"\b\d{1,2} de [a-záéíóú]+ (de|del) 20\d\d\b", plano, re.I)
+    l.append("• " + " · ".join(x for x in [num.group(0) if num else "", fecha.group(0) if fecha else ""] if x))
+    frases = [f.strip() for f in re.split(r"(?<=[.!?])\s+", plano)
+              if any(c in f.lower() for c in CLAVES_INSIVUMEH + ["norte moderado", "norte fuerte"])
+              and 15 < len(f) < 400]
+    if frases:
+        for f in frases[:4]:
+            l.append(f"   « {html.escape(f)} »")
+    else:
+        l.append("   sin menciones de frentes fríos, empujes de aire frío o vientos del norte fuertes")
+    esc = [ln.strip() for ln in txt.splitlines() if "escuintla" in ln.lower()]
+    for ln in esc[:3]:
+        l.append(f"   📍 {html.escape(re.sub(r'\s+', ' ', ln))}")
+    return "\n".join(l), bool(frases)
+
+
 # -------------------------------------------------------------------------
 # 3. Envío solo a chats personales
 # -------------------------------------------------------------------------
@@ -364,6 +402,7 @@ def main():
     t_ecmwf = texto_ecmwf(resumen_diario(area, hoy), ev)
     t_noaa, noaa_si = texto_noaa()
     t_insiv = texto_insivumeh()[0] if USAR_BOLETIN_INSIVUMEH else None
+    t_pron, insiv_si = texto_pronostico_insivumeh()
 
     if ev and noaa_si:
         concl = "✅ <b>Coinciden</b>: el modelo y la NOAA indican frente frío."
@@ -376,7 +415,7 @@ def main():
 
     cab = (f"🧪 <b>VALIDACIÓN FRENTES FRÍOS</b> – {al.fecha_txt(ahora)} {ahora:%H:%M}\n"
            "<i>Solo para revisión: esto NO se envió al grupo.</i>")
-    resumen = "\n\n".join([x for x in [cab, t_ecmwf, t_noaa, t_insiv, "3️⃣ " + concl,
+    resumen = "\n\n".join([x for x in [cab, t_ecmwf, t_noaa, t_pron, t_insiv, "3️⃣ " + concl,
                            "🗺️ Abajo: gráfica del modelo, mapa de superficie de la NOAA "
                            "(frente frío = línea azul con triángulos) e imagen satelital del INSIVUMEH."] if x])
     textos = [resumen]
