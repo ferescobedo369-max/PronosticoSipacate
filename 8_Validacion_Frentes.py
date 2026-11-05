@@ -354,7 +354,11 @@ def texto_pronostico_insivumeh():
     plano = re.sub(r"\s+", " ", txt)
     num = re.search(r"\bBD\s?\d+-20\d\d\b", plano)
     fecha = re.search(r"\b\d{1,2} de [a-záéíóú]+ (de|del) 20\d\d\b", plano, re.I)
-    l.append("• " + " · ".join(x for x in [num.group(0) if num else "", fecha.group(0) if fecha else ""] if x))
+    l.append("• " + " · ".join(x for x in [num.group(0) if num else "",
+                                           fecha.group(0).lower() if fecha else ""] if x))
+    persp = re.search(r"Condiciones y perspectiva:\s*(.+?[.])", plano)
+    if persp:
+        l.append(f"• Perspectiva: <i>{html.escape(persp.group(1))}</i>")
     frases = [f.strip() for f in re.split(r"(?<=[.!?])\s+", plano)
               if any(c in f.lower() for c in CLAVES_INSIVUMEH + ["norte moderado", "norte fuerte"])
               and 15 < len(f) < 400]
@@ -363,11 +367,31 @@ def texto_pronostico_insivumeh():
             l.append(f"   « {html.escape(f)} »")
     else:
         l.append("   sin menciones de frentes fríos, empujes de aire frío o vientos del norte fuertes")
-    esc = [ln.strip() for ln in txt.splitlines() if "escuintla" in ln.lower()]
-    for ln in esc[:3]:
-        ln = html.escape(re.sub(r"\s+", " ", ln))
-        l.append(f"   📍 {ln}")
-    return "\n".join(l), bool(frases)
+    norte_costa = False
+    for lugar in ESTACIONES_INSIVUMEH:
+        d = fila_estacion(plano, lugar)
+        if d:
+            viento = d[2].lower()
+            aviso = ""
+            if re.match(r"(norte|noreste|noroeste|nor)", viento):
+                norte_costa = True
+                aviso = " ⚠️ <b>viento del norte (hacia el mar)</b>"
+            l.append(f"   📍 <b>{lugar}</b>: mín {d[0]} °C · máx {d[1]} °C · viento {viento}{aviso}")
+    return "\n".join(l), bool(frases) or norte_costa
+
+
+ESTACIONES_INSIVUMEH = ["Puerto de San José", "Sabana Grande"]     # las más cercanas a Sipacate
+
+
+def fila_estacion(plano, lugar):
+    """De la tabla del PDF: 'Puerto de San José - Escuintla 20 a 22 31 a 33 Suroeste ligero'."""
+    patron = (re.escape(lugar).replace("é", "[eé]") +
+              r"\s*-\s*Escuintla\s+(\d+ a \d+)\s+(\d+ a \d+)\s+(.+?)"
+              r"(?=\s+[A-ZÁÉÍÓÚ][a-záéíóú]+(?: [A-Za-záéíóú]+)*\s*-|\s+Región|$)")
+    m = re.search(patron, plano)
+    if not m:
+        return None
+    return m.group(1).replace(" a ", "–"), m.group(2).replace(" a ", "–"), m.group(3).strip()
 
 
 # -------------------------------------------------------------------------
@@ -416,6 +440,8 @@ def main():
 
     cab = (f"🧪 <b>VALIDACIÓN FRENTES FRÍOS</b> – {al.fecha_txt(ahora)} {ahora:%H:%M}\n"
            "<i>Solo para revisión: esto NO se envió al grupo.</i>")
+    concl += ("\n🇬🇹 El INSIVUMEH <b>sí</b> menciona frente frío o viento del norte en la costa sur."
+              if insiv_si else "\n🇬🇹 El INSIVUMEH no menciona frente frío ni viento del norte en la costa sur.")
     resumen = "\n\n".join([x for x in [cab, t_ecmwf, t_noaa, t_pron, t_insiv, "3️⃣ " + concl,
                            "🗺️ Abajo: gráfica del modelo, mapa de superficie de la NOAA "
                            "(frente frío = línea azul con triángulos) e imagen satelital del INSIVUMEH."] if x])
