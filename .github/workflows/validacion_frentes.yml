@@ -1,7 +1,8 @@
 name: Validacion Frentes Frios Sipacate
 
-# SOLO VALIDACION: envia el resumen (modelo ECMWF + NOAA) unicamente a los chats
-# personales del secret TELEGRAM_CHAT_ID. No envia al grupo ni guarda nada en el repo.
+# VALIDACION: si hay senales de frente frio, envia el resumen SOLO a los chats personales
+# del secret TELEGRAM_CHAT_ID; si no hay senales, no envia nada. Nunca guarda nada en el repo.
+# Solo con emitir_grupo=1 (cuando el ICC lo autoriza) envia la alerta al grupo.
 # Corre al subir cambios a la rama validacion-frentes, o cuando la tarea programada
 # de Claude lo lanza cada manana (workflow_dispatch con ref=validacion-frentes).
 on:
@@ -11,6 +12,10 @@ on:
     inputs:
       solo_mostrar:
         description: '1 = solo mostrar en el log, sin enviar a Telegram'
+        required: false
+        default: ''
+      emitir_grupo:
+        description: '1 = EMITIR la alerta de frente frio al grupo (solo cuando el ICC lo autoriza)'
         required: false
         default: ''
 
@@ -42,4 +47,5 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           OPENMETEO_APIKEY: ${{ secrets.OPENMETEO_APIKEY }}
           SOLO_MOSTRAR: ${{ inputs.solo_mostrar }}
+          EMITIR_GRUPO: ${{ inputs.emitir_grupo }}
         run: python 8_Validacion_Frentes.py

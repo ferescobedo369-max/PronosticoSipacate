@@ -46,6 +46,11 @@ URLS_TWD = {
                       "https://www.nhc.noaa.gov/text/MIATWDEP.shtml"],
 }
 # Zonas que importan para Guatemala (la NOAA ahora usa "Gulf of America" para el Golfo de México)
+# Zonas CERCANAS a Guatemala: si la NOAA menciona un frente aquí, se avisa para seguimiento
+ZONAS_CERCA = ["yucatan", "campeche", "tehuantepec", "central america", "guatemala", "belize", "honduras",
+               "sw gulf", "southwest gulf", "se gulf", "southeast gulf", "southern gulf", "south-central gulf",
+               "nw caribbean", "northwest caribbean"]
+PDF_INSIVUMEH = {}                       # copia del pronóstico del día (para enviarla al grupo si se emite)
 ZONAS = ["gulf", "yucatan", "campeche", "tehuantepec", "central america", "guatemala",
          "mexico", "caribbean", "honduras", "belize"]
 UA = {"User-Agent": "PronosticoSipacate-validacion (GitHub Actions)"}
@@ -262,7 +267,7 @@ def resumen_es(frase):
 def texto_noaa():
     l = ["2️⃣ <b>NOAA – Discusión del Trópico</b> (meteorólogos del Centro Nacional de Huracanes). "
          "Resumen en español; toca el recuadro para ver la traducción y el texto original."]
-    hay = False
+    hay = cerca = False
     for nombre, urls in URLS_TWD.items():
         txt, u = leer_twd(urls)
         if not txt:
@@ -273,6 +278,7 @@ def texto_noaa():
         l.append(f"• <b>{nombre}</b>" + (f" ({html.escape(em)})" if em else "") + ":")
         if fr:
             hay = True
+            cerca = cerca or any(z in f.lower() for f in fr for z in ZONAS_CERCA)
             for f in fr[:4]:
                 l.append(f"   ▸ <b>{html.escape(resumen_es(f))}</b>")
                 es = traducir(f)
@@ -280,9 +286,14 @@ def texto_noaa():
                 l.append(f"<blockquote expandable>{detalle}</blockquote>")
         else:
             l.append("   sin menciones de frentes fríos cerca de la región")
-    l.append("→ " + ("<b>La NOAA menciona frentes fríos cerca de la región</b>" if hay
-                     else "La NOAA no menciona frentes fríos cerca de la región"))
-    return "\n".join(l), hay
+    if cerca:
+        l.append("→ <b>La NOAA menciona un frente frío cerca de Guatemala</b> (sur del Golfo, Yucatán, "
+                 "Tehuantepec o Centroamérica)")
+    elif hay:
+        l.append("→ La NOAA menciona frentes en el Golfo de México, todavía lejos de Guatemala")
+    else:
+        l.append("→ La NOAA no menciona frentes fríos en la región")
+    return "\n".join(l), hay, cerca
 
 
 def descargar_imagen(url, ruta):
@@ -352,6 +363,7 @@ def texto_pronostico_insivumeh():
             l.append(f"• ⚠️ No se pudo leer hoy (respuesta {r.status_code}). ¿Cambió el enlace?")
             return "\n".join(l), False
         print(f"Pronóstico INSIVUMEH: {r.url.split('?')[0]} · Last-Modified: {r.headers.get('Last-Modified')}")
+        PDF_INSIVUMEH["bytes"] = r.content
         from pypdf import PdfReader
         txt = "\n".join((pg.extract_text() or "") for pg in PdfReader(io.BytesIO(r.content)).pages)
     except Exception as e:
@@ -374,6 +386,8 @@ def texto_pronostico_insivumeh():
         if f_bol < pd.Timestamp.now(tz=TZ).normalize():
             l.append(f"• ⚠️ <b>El boletín es del {fecha.group(0).lower()}: no se ha actualizado.</b> "
                      "Revisar si el INSIVUMEH cambió el enlace.")
+    PDF_INSIVUMEH["titulo"] = " · ".join(x for x in [num.group(0) if num else "",
+                                                    fecha.group(0).lower() if fecha else ""] if x)
     persp = re.search(r"Condiciones y perspectiva:\s*(.+?[.])", plano)
     if persp:
         l.append(f"• Perspectiva: <i>{html.escape(persp.group(1))}</i>")
@@ -435,48 +449,124 @@ def enviar_validacion(textos, fotos):
             print(f"{'✓' if r.ok else '✗'} imagen a {chat} {'' if r.ok else r.text}")
 
 
+def detectar_para_emitir(area, ahora):
+    """Si el usuario decide emitir y el modelo no marcó el frente con los criterios normales,
+    se buscan las condiciones con criterios más flexibles solo para llenar los datos de la alerta."""
+    ev = al.detectar_frente_frio(area, ahora)
+    if ev:
+        return ev
+    orig = (al.FF_SUBIDA_PRESION, al.FF_BAJADA_TEMP, al.FF_HORAS_SEGUIDAS, al.FF_HORAS_NORTE, al.FF_VIENTO_MIN)
+    try:
+        al.FF_SUBIDA_PRESION, al.FF_BAJADA_TEMP = -1e9, -1e9
+        al.FF_HORAS_SEGUIDAS, al.FF_HORAS_NORTE, al.FF_VIENTO_MIN = 2, 3, 8.0
+        return al.detectar_frente_frio(area, ahora)
+    finally:
+        (al.FF_SUBIDA_PRESION, al.FF_BAJADA_TEMP, al.FF_HORAS_SEGUIDAS,
+         al.FF_HORAS_NORTE, al.FF_VIENTO_MIN) = orig
+
+
+def emitir_al_grupo(area, ahora):
+    """SOLO cuando el usuario lo autoriza (EMITIR_GRUPO=1): envía la alerta de frente frío al grupo,
+    a los chats del secret y a los suscriptores, junto con el pronóstico diario del INSIVUMEH."""
+    import requests
+    ev = detectar_para_emitir(area, ahora)
+    token = al._token()
+    fijos = re.findall(r"-?\d+", os.environ.get("TELEGRAM_CHAT_ID", ""))
+    personales = [c for c in fijos if not c.startswith("-")]
+    url = f"https://api.telegram.org/bot{token}"
+    solo_mostrar = os.environ.get("SOLO_MOSTRAR") == "1"
+
+    if not ev:
+        aviso = ("⚠️ <b>No se emitió la alerta</b>: el modelo no ve viento del norte en Sipacate en los "
+                 "próximos días, así que no hay datos para llenar el mensaje. Revisemos juntos antes de emitir.")
+        print(aviso)
+        if not solo_mostrar:
+            for c in personales:
+                requests.post(f"{url}/sendMessage", data={"chat_id": c, "text": aviso, "parse_mode": "HTML"}, timeout=30)
+        raise SystemExit(1)
+
+    alerta = al.mensaje_frente_frio(ev, ahora)
+    texto_pronostico_insivumeh()                       # descarga el PDF del día
+    print("ALERTA A EMITIR:\n" + alerta)
+    if solo_mostrar:
+        print("SOLO_MOSTRAR=1: vista previa, no se envía nada.")
+        return
+
+    # Destinos: grupo + chats del secret + suscriptores registrados (lista cifrada guardada en main)
+    destinos = list(dict.fromkeys(fijos))
+    try:
+        r = requests.get("https://raw.githubusercontent.com/ferescobedo369-max/PronosticoSipacate/main/"
+                         "3_Suscriptores/suscriptores.enc", timeout=30)
+        if r.ok:
+            os.makedirs(os.path.dirname(al.ARCHIVO_SUSCRIPTORES), exist_ok=True)
+            with open(al.ARCHIVO_SUSCRIPTORES, "wb") as f:
+                f.write(r.content)
+        subs = al.cargar_suscriptores(token)
+        api = al._api(token)
+        grupo = next((c for c in fijos if c.startswith("-")), None)
+        for cid in sorted(subs["personas"]):
+            if cid in destinos:
+                continue
+            if grupo:
+                m = api("getChatMember", chat_id=grupo, user_id=cid)
+                if m.get("ok") and m["result"].get("status") not in al.ESTADOS_MIEMBRO:
+                    continue
+            destinos.append(cid)
+    except Exception as e:
+        print(f"⚠ Suscriptores no disponibles: {e!r}")
+
+    enviados = 0
+    for c in destinos:
+        r = requests.post(f"{url}/sendMessage", data={"chat_id": c, "text": alerta, "parse_mode": "HTML",
+                                                      "disable_web_page_preview": "true"}, timeout=30)
+        ok = r.ok
+        if ok and PDF_INSIVUMEH.get("bytes"):
+            cap = "📄 Pronóstico diario del INSIVUMEH" + (f" – {PDF_INSIVUMEH.get('titulo')}" if PDF_INSIVUMEH.get("titulo") else "")
+            requests.post(f"{url}/sendDocument", data={"chat_id": c, "caption": cap},
+                          files={"document": ("Pronostico_diario_INSIVUMEH.pdf", PDF_INSIVUMEH["bytes"],
+                                              "application/pdf")}, timeout=60)
+        enviados += ok
+        print(f"{'✓' if ok else '✗'} alerta a {c}")
+    for c in personales:
+        requests.post(f"{url}/sendMessage", data={"chat_id": c, "parse_mode": "HTML",
+                      "text": f"✅ <b>Alerta de frente frío emitida</b> a {enviados} destinos (grupo y chats personales)."},
+                      timeout=30)
+
+
 def main():
     ahora = pd.Timestamp.now(tz=TZ)
     hoy = ahora.normalize()
     puntos = al.puntos_del_area(os.path.join(BASE, "1_Shapefile", "Area_of_interest.shp"))
     area = al.resumir_area(al.descargar(puntos))
-    ev = al.detectar_frente_frio(area, ahora)
 
+    if os.environ.get("EMITIR_GRUPO") == "1":
+        emitir_al_grupo(area, ahora)
+        return
+
+    ev = al.detectar_frente_frio(area, ahora)
     t_ecmwf = texto_ecmwf(resumen_diario(area, hoy), ev)
-    t_noaa, noaa_si = texto_noaa()
-    t_insiv = texto_insivumeh()[0] if USAR_BOLETIN_INSIVUMEH else None
+    t_noaa, noaa_si, noaa_cerca = texto_noaa()
     t_pron, insiv_si = texto_pronostico_insivumeh()
 
-    # El MODELO decide si hay frente; la NOAA y el INSIVUMEH solo lo CONFIRMAN.
-    cab = (f"🧪 <b>VALIDACIÓN FRENTES FRÍOS</b> – {al.fecha_txt(ahora)} {ahora:%H:%M}\n"
-           "<i>Solo para revisión: esto NO se envió al grupo.</i>")
-    if ev:
-        conf = [n for n, si in [("NOAA", noaa_si), ("INSIVUMEH", insiv_si)] if si]
-        if len(conf) == 2:
-            concl = ("✅ <b>Frente confirmado</b>: el modelo lo detecta y lo confirman la NOAA y el INSIVUMEH. "
-                     "La alerta para el grupo sería válida.")
-        elif conf:
-            falta = "INSIVUMEH" if conf == ["NOAA"] else "NOAA"
-            concl = (f"🟡 <b>Frente parcialmente confirmado</b>: el modelo lo detecta y lo confirma la {conf[0]}; "
-                     f"el {falta} todavía no lo menciona. Revisar antes de avisar al grupo.")
-        else:
-            concl = ("⚠️ <b>Sin confirmación</b>: solo el modelo detecta el frente; ni la NOAA ni el INSIVUMEH "
-                     "lo mencionan. Posible falsa alarma: no se avisaría al grupo.")
-        t_oficial = t_pron.replace("🇬🇹 <b>INSIVUMEH – Pronóstico diario oficial</b>",
-                                   "🇬🇹 <b>Confirmación oficial – INSIVUMEH</b> (pronóstico diario)")
+    # ¿Hay algo que reportar? El modelo, la NOAA (frente cerca de Guatemala) o el INSIVUMEH
+    senales = {"Modelo ECMWF": bool(ev), "NOAA": noaa_cerca, "INSIVUMEH": insiv_si}
+    if not any(senales.values()):
+        print("Sin señales de frente frío en ninguna fuente: no se envía nada hoy.")
+        print(t_ecmwf + "\n\n" + t_noaa + "\n\n" + t_pron)
+        return
+    alta = bool(ev) and (noaa_cerca or insiv_si)
+    marcas = " · ".join(f"{n} {'✅' if v else '❌'}" for n, v in senales.items())
+    if alta:
+        cab = ("🔴 <b>FRENTE FRÍO CON ALTA CONFIANZA</b>\n<i>Solo para ti: no se envió al grupo.</i>\n"
+               f"Señales: {marcas}")
     else:
-        concl = "✅ <b>El modelo no detecta frente frío en Sipacate: no se emite ninguna alerta.</b>"
-        if noaa_si:
-            concl += ("\nℹ️ La NOAA menciona un frente en la región (ver arriba): solo para seguimiento, "
-                      "por si llega en los próximos días.")
-        if insiv_si:
-            concl += ("\nℹ️ El INSIVUMEH menciona frente o viento del norte en la costa, pero el modelo no lo ve: "
-                      "revisar si los criterios del modelo son muy estrictos.")
-        t_oficial = t_pron.replace("🇬🇹 <b>INSIVUMEH – Pronóstico diario oficial</b>",
-                                   "🇬🇹 <b>INSIVUMEH – Pronóstico diario</b> (solo revisión)")
-    resumen = "\n\n".join([x for x in [cab, t_ecmwf, t_noaa, t_oficial, t_insiv, "3️⃣ " + concl,
-                           "🗺️ Abajo: gráfica del modelo, mapa de superficie de la NOAA "
-                           "(frente frío = línea azul con triángulos) e imagen satelital del INSIVUMEH."] if x])
+        cab = ("⚠️ <b>POSIBLE FRENTE FRÍO – favor de darle seguimiento</b>\n"
+               f"<i>Solo para ti: no se envió al grupo.</i>\nSeñales: {marcas}")
+    pie = ("👉 Si después de revisarlo confirmas que es un frente frío, escríbeme en Claude "
+           "<b>«emite la alerta de frente frío»</b> y la envío al grupo junto con el pronóstico del INSIVUMEH.")
+    resumen = "\n\n".join([cab, t_ecmwf, t_noaa, t_pron, pie,
+                            "🗺️ Abajo: gráfica del modelo, mapa de superficie de la NOAA "
+                            "(frente frío = línea azul con triángulos) e imagen satelital del INSIVUMEH."])
     textos = [resumen]
     if ev:
         textos.append("👇 <b>Vista previa de la alerta para el grupo</b> (no enviada):\n\n"
@@ -496,15 +586,6 @@ def main():
 
     for t in textos:
         print(t + "\n" + "-" * 60)
-    if os.environ.get("SOLO_MOSTRAR") == "1":           # copia liviana de las imágenes en el log, para revisión
-        import base64
-        from PIL import Image
-        for ruta, _ in fotos:
-            img = Image.open(ruta).convert("RGB")
-            img.thumbnail((1400, 1400))
-            buf = io.BytesIO()
-            img.save(buf, "JPEG", quality=70)
-            print(f"IMG_B64 {os.path.basename(ruta)} {base64.b64encode(buf.getvalue()).decode()}")
     enviar_validacion(textos, fotos)
 
 
