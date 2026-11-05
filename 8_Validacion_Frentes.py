@@ -168,6 +168,9 @@ GLOSARIO = [
     (r"vientos? de (brecha|hueco|espacio)", "vientos de paso (gap winds)"),
     (r"límite frontal estancado", "frente estancado"),
     (r"\bfrente frio\b", "frente frío"),
+    (r"(la |el )?(mendiga|mango|sartén|asa|panhandle) de Florida", "el norte de Florida"),
+    (r"Golfo del (Noroeste|Noreste|Suroeste|Sureste)", lambda m: m.group(1).lower() + " del Golfo"),
+    (r"\bNE de México", "noreste de México"),
 ]
 
 
