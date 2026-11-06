@@ -97,15 +97,3 @@ jobs:
             done
             echo "No se pudo guardar despues de 5 intentos"; exit 1
           fi
-
-      - name: Avisar por Telegram si fallo
-        if: failure()
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          for c in $(echo "$TELEGRAM_CHAT_ID" | tr ',' '\n' | grep -E '^[0-9]+$'); do
-            curl -s -o /dev/null "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
-              --data-urlencode "chat_id=$c" \
-              --data-urlencode "text=⚠️ Falló: boletín diario (datos, PDF y correo). Detalle: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          done
