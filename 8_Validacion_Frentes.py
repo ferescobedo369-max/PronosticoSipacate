@@ -1020,7 +1020,9 @@ def main():
     ahora = pd.Timestamp.now(tz=TZ)
     hoy = ahora.normalize()
     puntos = al.puntos_del_area(os.path.join(BASE, "1_Shapefile", "Area_of_interest.shp"))
-    prueba = os.environ.get("PRUEBA") == "1"
+    prueba = os.environ.get("PRUEBA", "").strip().lower() in ("1", "seguimiento")
+    # PRUEBA=seguimiento: los mismos datos simulados, pero al grupo de seguimiento (nunca al general)
+    prueba_seguimiento = os.environ.get("PRUEBA", "").strip().lower() == "seguimiento"
     if prueba:                                      # datos simulados, solo al chat personal
         area, dfs_prueba, hist_prueba = datos_prueba(ahora)
         globals()["descargar_ensamble"] = lambda lat, lon: ("ecmwf_ifs025", dfs_prueba)
@@ -1094,7 +1096,8 @@ def main():
     al_grupo = False
     if prueba:
         cab = ("🧪 <b>PRUEBA con datos simulados</b> – no es un pronóstico real. "
-               "Solo se envió a tu chat personal (prueba).\n\n" + cab)
+               + ("Ejemplo de cómo se verá el aviso en este grupo.\n\n" if prueba_seguimiento
+                else "Solo se envió a tu chat personal (prueba).\n\n") + cab)
     # El boletín del INSIVUMEH sale una vez al día: si ya se mostró, solo una línea
     boletin_nuevo = True
     num_bol = PDF_INSIVUMEH.get("num")
@@ -1138,7 +1141,7 @@ def main():
 
     for t in textos:
         print(t + "\n" + "-" * 60)
-    entregado = enviar_validacion(textos, fotos, animaciones, solo_dueno=prueba)
+    entregado = enviar_validacion(textos, fotos, animaciones, solo_dueno=prueba and not prueba_seguimiento)
     if entregado and boletin_nuevo and not prueba and os.environ.get("SOLO_MOSTRAR") != "1":
         print(f"INSIV_MOSTRADO {PDF_INSIVUMEH.get('num')}")    # para no repetirlo en la próxima revisión
     if not entregado and os.environ.get("SOLO_MOSTRAR") != "1":
