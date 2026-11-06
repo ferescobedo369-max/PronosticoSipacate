@@ -1048,7 +1048,7 @@ def main():
     if mostrada == 0 and (ev or noaa_cerca or insiv_si):
         mostrada = 5.0                                      # hay alguna señal, aunque el ensamble no la vea
 
-    senales = {"Ensamble": p_ens >= P_MIN_AVISO, "Modelo ECMWF": bool(ev), "NOAA": noaa_cerca,
+    senales = {"Ensamble ECMWF": p_ens >= P_MIN_AVISO, "Modelo ECMWF": bool(ev), "NOAA": noaa_cerca,
                "INSIVUMEH": insiv_si}
     t_prob = texto_probabilidad(prob, mostrada)
     if not any(senales.values()):
@@ -1083,13 +1083,14 @@ def main():
             reco = ("🟡 <b>Recomendación: revisar antes de enviar.</b> El ensamble lo detecta, pero el modelo principal "
                     "aún no marca el frente con todos los criterios.")
         cab = (f"🔴 <b>POSIBLE LLEGADA DE FRENTE FRÍO – probabilidad {mostrada:.0f} %</b> · <b>para revisar y validar</b>\n"
-               f"<i>Solo para seguimiento interno: no se envió al grupo general.</i>\nSeñales: {marcas}")
+               f"<i>Seguimiento interno</i>\nModelos y fuentes: {marcas}")
         pie = (reco + "\n👉 Si el ICC decide enviarlo, se solicita en Claude <b>«emite la alerta de frente frío»</b> y se envía "
                "al grupo con el mensaje, las 2 gráficas de probabilidad y la animación del satélite.")
     else:
         cab = (f"{color} <b>POSIBLE LLEGADA DE FRENTE FRÍO – probabilidad {mostrada:.0f} %</b> · favor de darle seguimiento\n"
-               f"<i>Solo para seguimiento interno: no se envió al grupo general.</i>\nSeñales: {marcas}")
-        pie = (f"👉 Cuando la probabilidad llegue a {P_GRUPO} % te aviso para que lo revises y decidas si se envía al grupo.")
+               f"<i>Seguimiento interno</i>\nModelos y fuentes: {marcas}")
+        pie = (f"👉 Si la probabilidad llega a {P_GRUPO} %, se lanzará un aviso para su revisión y aprobación "
+               "del envío de la alerta al grupo general (gremial).")
     al_grupo = False
     if prueba:
         cab = ("🧪 <b>PRUEBA con datos simulados</b> – no es un pronóstico real. "
