@@ -14,6 +14,10 @@ on:
         description: '1 = solo mostrar en el log, sin enviar a Telegram'
         required: false
         default: ''
+      prueba:
+        description: '1 = PRUEBA con datos simulados (solo al chat personal)'
+        required: false
+        default: ''
       emitir_grupo:
         description: '1 = EMITIR la alerta de frente frio al grupo (solo cuando el ICC lo autoriza)'
         required: false
@@ -49,5 +53,6 @@ jobs:
           OPENMETEO_APIKEY: ${{ secrets.OPENMETEO_APIKEY }}
           SOLO_MOSTRAR: ${{ inputs.solo_mostrar }}
           EMITIR_GRUPO: ${{ inputs.emitir_grupo }}
+          PRUEBA: ${{ inputs.prueba }}
           GITHUB_TOKEN: ${{ github.token }}
         run: python 8_Validacion_Frentes.py

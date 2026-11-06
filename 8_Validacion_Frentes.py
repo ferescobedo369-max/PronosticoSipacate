@@ -213,6 +213,63 @@ def probabilidad_frente(puntos, hoy):
     return {"modelo": modelo, "n": n, "total": total, "por_dia": por_dia}
 
 
+def historial_probabilidad(dias=5):
+    """Probabilidades de las revisiones anteriores (líneas 'PROB_HIST' en los logs de GitHub)."""
+    import requests
+    tok, repo, yo = os.environ.get("GITHUB_TOKEN"), os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_RUN_ID")
+    if not tok or not repo:
+        return []
+    h = {"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"}
+    desde = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=dias)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    hist = []
+    try:
+        runs = requests.get(f"https://api.github.com/repos/{repo}/actions/workflows/validacion_frentes.yml/runs",
+                            headers=h, params={"created": f">={desde}", "per_page": 30}, timeout=30).json()
+        for run in runs.get("workflow_runs", []):
+            if str(run["id"]) == str(yo) or run.get("conclusion") != "success":
+                continue
+            for j in requests.get(run["jobs_url"], headers=h, timeout=30).json().get("jobs", []):
+                log = requests.get(f"https://api.github.com/repos/{repo}/actions/jobs/{j['id']}/logs",
+                                   headers=h, timeout=60).text
+                for m in re.finditer(r"PROB_HIST (\S+) ([\d.]+)", log):
+                    hist.append((pd.Timestamp(m.group(1)).tz_convert(TZ), float(m.group(2))))
+    except Exception as e:
+        print(f"⚠ No se pudo leer el historial de probabilidades: {e!r}")
+    return sorted(set(hist))
+
+
+def grafica_evolucion(hist, ruta, titulo_extra=""):
+    """Gráfica de líneas: cómo cambia la probabilidad en cada revisión (cada 12 h)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    if not hist:
+        return False
+    x = list(range(len(hist)))
+    p = [v for _, v in hist]
+    etiquetas = [f"{al.fecha_txt(t)[:3]} {t:%d}\n{t:%H:%M}" for t, _ in hist]
+    col = ["#bdbdbd" if v < 1 else "#f9a825" if v < 40 else "#ef6c00" if v < P_GRUPO else "#c62828" for v in p]
+    fig, ax = plt.subplots(figsize=(10, 4.2))
+    ax.plot(x, p, color="#555", lw=1.2, zorder=1)
+    ax.scatter(x, p, s=110, c=col, zorder=2, edgecolor="white", linewidth=1.2)
+    for i, v in enumerate(p):
+        ax.text(i, v + 5, f"{v:.0f} %", ha="center", fontsize=9, fontweight="bold")
+    ax.axhline(P_GRUPO, color="#c62828", ls="--", lw=.9)
+    ax.text(-.3, P_GRUPO + 2, f"{P_GRUPO} %: se avisa al grupo", color="#c62828", fontsize=8.5)
+    ax.set_xticks(x)
+    ax.set_xticklabels(etiquetas, fontsize=8)
+    ax.set_xlim(-.6, max(len(x) - .4, 3))
+    ax.set_ylim(-3, 112)
+    ax.set_ylabel("Probabilidad estimada (%)")
+    ax.set_title("Evolución de la probabilidad de llegada de frente frío (revisión cada 12 h)" + titulo_extra,
+                 fontsize=10)
+    ax.grid(axis="y", alpha=.3)
+    fig.tight_layout()
+    fig.savefig(ruta, dpi=110)
+    plt.close(fig)
+    return True
+
+
 def texto_probabilidad(prob, mostrada):
     if not prob:
         return "📈 <b>Probabilidad</b>: no se pudo calcular hoy (ensamble no disponible)"
@@ -746,11 +803,49 @@ def emitir_al_grupo(area, ahora, prob=None, probabilidad=None):
                       timeout=30)
 
 
+def datos_prueba(ahora):
+    """PRUEBA: frente simulado que llega en 4 días (no es un pronóstico real)."""
+    hoy = ahora.normalize()
+    llegada = hoy + pd.Timedelta(days=4, hours=3)
+    t = pd.date_range(hoy - pd.Timedelta(days=2), hoy + pd.Timedelta(days=7), freq="h", inclusive="left")
+    filas = []
+    for lat, lon in [(13.95, -91.3), (14.0, -91.1)]:
+        for x in t:
+            f = llegada <= x < llegada + pd.Timedelta(hours=48)
+            base_dir, base_v = (10, 4) if x.hour < 10 else (200, 10)
+            filas.append(dict(date=x, lat=lat, lon=lon,
+                              temperature_2m=(24 if f else 28) + 5 * np.sin((x.hour - 9) / 24 * 2 * np.pi),
+                              pressure_msl=1015 if f else 1010, relative_humidity_2m=45 if f else 75,
+                              wind_speed_10m=19 if f else base_v, wind_direction_10m=(350 if lon < -91.2 else 15) if f else base_dir,
+                              wind_speed_100m=25 if f else base_v * 1.3, wind_direction_100m=5 if f else base_dir,
+                              wind_gusts_10m=35 if f else 14))
+    area = al.resumir_area(pd.DataFrame(filas))
+    t3 = pd.date_range(hoy - pd.Timedelta(days=2), hoy + pd.Timedelta(days=7), freq="3h", inclusive="left")
+    def miembro(lleg):
+        rows = []
+        for x in t3:
+            f = lleg is not None and lleg <= x < lleg + pd.Timedelta(hours=48)
+            rows.append(dict(wind_speed_10m=20 if f else 8, wind_direction_10m=5 if f else 200,
+                             pressure_msl=1015 if f else 1010,
+                             temperature_2m=(20 if f else 24) + 6 * np.sin((x.hour - 9) / 24 * 2 * np.pi)))
+        return pd.DataFrame(rows, index=t3)
+    llegadas = ([llegada - pd.Timedelta(hours=6)] * 6 + [llegada] * 26 + [llegada + pd.Timedelta(days=1)] * 6
+                + [None] * 13)                                     # 38 de 51 = 75 %
+    dfs = {i: miembro(l) for i, l in enumerate(llegadas)}
+    hist = [(ahora - pd.Timedelta(hours=12 * k), v) for k, v in zip(range(6, 0, -1), [0, 5, 10, 20, 35, 55])]
+    return area, dfs, hist
+
+
 def main():
     ahora = pd.Timestamp.now(tz=TZ)
     hoy = ahora.normalize()
     puntos = al.puntos_del_area(os.path.join(BASE, "1_Shapefile", "Area_of_interest.shp"))
-    area = al.resumir_area(al.descargar(puntos))
+    prueba = os.environ.get("PRUEBA") == "1"
+    if prueba:                                      # datos simulados, solo al chat personal
+        area, dfs_prueba, hist_prueba = datos_prueba(ahora)
+        globals()["descargar_ensamble"] = lambda lat, lon: ("ecmwf_ifs025", dfs_prueba)
+    else:
+        area = al.resumir_area(al.descargar(puntos))
 
     if os.environ.get("EMITIR_GRUPO") == "1":
         prob = probabilidad_frente(puntos, hoy)
@@ -764,6 +859,8 @@ def main():
 
     prob = probabilidad_frente(puntos, hoy)
     p_ens = prob["total"] if prob else 0.0
+    if not prueba and os.environ.get("SOLO_MOSTRAR") != "1":
+        print(f"PROB_HIST {ahora.isoformat()} {p_ens:.1f}")        # para la gráfica de evolución
 
     mostrada = float(round(p_ens))
     if mostrada == 0 and (ev or noaa_cerca or insiv_si):
@@ -777,9 +874,9 @@ def main():
         print(t_prob + "\n\n" + t_ecmwf + "\n\n" + t_noaa + "\n\n" + t_pron)
         return
 
-    # Al grupo: ensamble >= 90 %, máximo un aviso al día
+    # Al grupo: ensamble >= 90 %, máximo un aviso al día (nunca en la prueba)
     al_grupo, motivo = False, ""
-    if p_ens >= P_GRUPO:
+    if p_ens >= P_GRUPO and not prueba:
         hrs = horas_desde_ultimo_aviso_grupo()
         if hrs is not None and hrs < HORAS_ENTRE_AVISOS_GRUPO:
             motivo = f"ya se avisó al grupo hace {hrs:.0f} h; la próxima actualización sale en la revisión de mañana"
@@ -800,6 +897,9 @@ def main():
     pie = None if al_grupo else (
         f"👉 Se avisará al grupo automáticamente cuando la probabilidad llegue a {P_GRUPO} %. "
         "Si quieres emitirlo antes, escríbeme en Claude <b>«emite la alerta de frente frío»</b>.")
+    if prueba:
+        cab = ("🧪 <b>PRUEBA con datos simulados</b> – no es un pronóstico real. "
+               "Solo se envió a tu chat personal.\n\n" + cab)
     resumen = "\n\n".join([x for x in [cab, t_prob, t_ecmwf, t_noaa, t_pron, pie,
                             "🗺️ Abajo: gráfica de probabilidad, gráfica del modelo, mapa de la NOAA "
                             "(frente frío = línea azul con triángulos) e imagen satelital del INSIVUMEH."] if x])
@@ -809,6 +909,10 @@ def main():
                       + mensaje_grupo(ev, ahora, mostrada))
 
     fotos = []
+    hist = (hist_prueba if prueba else historial_probabilidad()) + [(ahora, float(mostrada))]
+    ge = os.path.join(BASE, "_grafica_evolucion.png")
+    if grafica_evolucion(hist, ge, " – PRUEBA" if prueba else ""):
+        fotos.append((ge, "Evolución de la probabilidad en cada revisión (cada 12 h)"))
     if prob:
         gp = os.path.join(BASE, "_grafica_probabilidad.png")
         grafica_probabilidad(prob, mostrada, gp)
