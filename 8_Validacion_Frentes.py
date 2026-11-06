@@ -706,11 +706,22 @@ def partir_mensaje(texto, limite=3900):
     return [p_ if len(p_) <= 4096 else p_[:4000] + "…" for p_ in partes]
 
 
-def destinatarios_validacion():
-    """Quién recibe los avisos de validación: el secret TELEGRAM_VALIDACION (ids elegidos por el ICC);
-    si no existe, los chats personales de TELEGRAM_CHAT_ID. Nunca el grupo ni los suscriptores."""
-    lista = os.environ.get("TELEGRAM_VALIDACION", "") or os.environ.get("TELEGRAM_CHAT_ID", "")
-    return [c for c in dict.fromkeys(re.findall(r"-?\d+", lista)) if not c.startswith("-")]
+def ids_dueno():
+    """Chats personales del secret TELEGRAM_CHAT_ID (el dueño: pruebas y confirmaciones)."""
+    return [c for c in re.findall(r"-?\d+", os.environ.get("TELEGRAM_CHAT_ID", "")) if not c.startswith("-")]
+
+
+def destinatarios_validacion(solo_dueno=False):
+    """Quién recibe los avisos de validación:
+    - pruebas (solo_dueno=True): solo el dueño;
+    - si existe el secret TELEGRAM_VALIDACION: esos chats (puede ser el GRUPO DE SEGUIMIENTO y/o personas);
+    - si no: el dueño.
+    Nunca el grupo general (el id negativo de TELEGRAM_CHAT_ID) ni los suscriptores."""
+    if solo_dueno or not os.environ.get("TELEGRAM_VALIDACION", "").strip():
+        return list(dict.fromkeys(ids_dueno()))
+    general = {c for c in re.findall(r"-?\d+", os.environ.get("TELEGRAM_CHAT_ID", "")) if c.startswith("-")}
+    ids = [c for c in dict.fromkeys(re.findall(r"-?\d+", os.environ["TELEGRAM_VALIDACION"])) if c not in general]
+    return ids or list(dict.fromkeys(ids_dueno()))
 
 
 def listar_suscriptores():
@@ -728,6 +739,14 @@ def listar_suscriptores():
             f.write(r.content)
     subs = al.cargar_suscriptores(token)
     api = al._api(token)
+    import json as _json
+    grupos = {}
+    pend = api("getUpdates", timeout=0, allowed_updates=_json.dumps(["message", "my_chat_member"]),
+               **({"offset": subs["offset"] + 1} if subs.get("offset") else {}))
+    for u in pend.get("result", []):
+        ch = ((u.get("message") or u.get("my_chat_member") or {}).get("chat") or {})
+        if ch.get("type") in ("group", "supergroup") and str(ch.get("id")) != str(grupo):
+            grupos[str(ch["id"])] = ch.get("title", "")
     nuevos = al.registrar_nuevos(api, subs)            # incluye a quienes tocaron Iniciar hoy (no se guarda)
     validacion = set(destinatarios_validacion())
     l = ["👥 <b>Personas que tocaron Iniciar en el bot</b>", ""]
@@ -742,8 +761,13 @@ def listar_suscriptores():
         l.append(f"• {html.escape(d.get('nombre') or 'sin nombre')}: <code>{cid}</code>{estado}{marca}{nuevo}")
     if not subs["personas"]:
         l.append("Todavía nadie ha tocado Iniciar.")
-    l += ["", "Para que alguien reciba los avisos de validación, agrega su número al secret "
-              "<b>TELEGRAM_VALIDACION</b> (separados por coma, incluyendo el tuyo)."]
+    if grupos:
+        l += ["", "👥 <b>Otros grupos donde está el bot</b> (posible grupo de seguimiento):"]
+        for gid, tit in grupos.items():
+            marca = " · ✅ recibe validación" if gid in validacion else ""
+            l.append(f"• {html.escape(tit)}: <code>{gid}</code>{marca}")
+    l += ["", "Para el grupo de seguimiento, pon su número (empieza con -) en el secret "
+              "<b>TELEGRAM_VALIDACION</b>. También puedes agregar personas, separadas por coma."]
     texto = "\n".join(l)
     print(texto)
     for c in duenos:
@@ -751,10 +775,10 @@ def listar_suscriptores():
                       data={"chat_id": c, "text": texto, "parse_mode": "HTML"})
 
 
-def enviar_validacion(textos, fotos, animaciones=()):
+def enviar_validacion(textos, fotos, animaciones=(), solo_dueno=False):
     import requests
     token = al._token()
-    chats = destinatarios_validacion()
+    chats = destinatarios_validacion(solo_dueno)
     if os.environ.get("SOLO_MOSTRAR") == "1" or not token or not chats:
         print("No se envía (SOLO_MOSTRAR o sin token/chat personal).")
         return False
@@ -1066,7 +1090,7 @@ def main():
         llenable = detectar_para_emitir(area, ahora) is not None
         if hrs is not None and hrs < HORAS_ENTRE_AVISOS_GRUPO:
             reco = (f"ℹ️ Ya se envió una alerta al grupo hace {hrs:.0f} h. Si quieres mandar una actualización, "
-                    "escríbeme en Claude <b>«emite la alerta de frente frío»</b>.")
+                    "se solicita en Claude: <b>«emite la alerta de frente frío»</b>.")
         elif not llenable:
             reco = ("⚠️ <b>Recomendación: esperar.</b> El ensamble da probabilidad alta, pero el modelo principal "
                     "todavía no muestra viento del norte en Sipacate para llenar la alerta. Revisar en la próxima revisión.")
@@ -1080,17 +1104,17 @@ def main():
             reco = ("🟡 <b>Recomendación: revisar antes de enviar.</b> El ensamble lo detecta, pero el modelo principal "
                     "aún no marca el frente con todos los criterios.")
         cab = (f"🔴 <b>POSIBLE LLEGADA DE FRENTE FRÍO – probabilidad {mostrada:.0f} %</b> · <b>para revisar y validar</b>\n"
-               f"<i>Solo para ti: no se envió al grupo.</i>\nSeñales: {marcas}")
-        pie = (reco + "\n👉 Si decides enviarlo, escríbeme en Claude <b>«emite la alerta de frente frío»</b> y lo mando "
+               f"<i>Solo para seguimiento interno: no se envió al grupo general.</i>\nSeñales: {marcas}")
+        pie = (reco + "\n👉 Si el ICC decide enviarlo, se solicita en Claude <b>«emite la alerta de frente frío»</b> y se envía "
                "al grupo con el mensaje, las 2 gráficas de probabilidad y la animación del satélite.")
     else:
         cab = (f"{color} <b>POSIBLE LLEGADA DE FRENTE FRÍO – probabilidad {mostrada:.0f} %</b> · favor de darle seguimiento\n"
-               f"<i>Solo para ti: no se envió al grupo.</i>\nSeñales: {marcas}")
+               f"<i>Solo para seguimiento interno: no se envió al grupo general.</i>\nSeñales: {marcas}")
         pie = (f"👉 Cuando la probabilidad llegue a {P_GRUPO} % te aviso para que lo revises y decidas si se envía al grupo.")
     al_grupo = False
     if prueba:
         cab = ("🧪 <b>PRUEBA con datos simulados</b> – no es un pronóstico real. "
-               "Solo se envió a tu chat personal.\n\n" + cab)
+               "Solo se envió a tu chat personal (prueba).\n\n" + cab)
     # El boletín del INSIVUMEH sale una vez al día: si ya se mostró, solo una línea
     boletin_nuevo = True
     num_bol = PDF_INSIVUMEH.get("num")
@@ -1134,7 +1158,7 @@ def main():
 
     for t in textos:
         print(t + "\n" + "-" * 60)
-    entregado = enviar_validacion(textos, fotos, animaciones)
+    entregado = enviar_validacion(textos, fotos, animaciones, solo_dueno=prueba)
     if entregado and boletin_nuevo and not prueba and os.environ.get("SOLO_MOSTRAR") != "1":
         print(f"INSIV_MOSTRADO {PDF_INSIVUMEH.get('num')}")    # para no repetirlo en la próxima revisión
     if not entregado and os.environ.get("SOLO_MOSTRAR") != "1":
