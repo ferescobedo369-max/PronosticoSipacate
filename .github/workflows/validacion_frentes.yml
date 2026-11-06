@@ -1,4 +1,7 @@
 name: Validacion Frentes Frios Sipacate
+# Las revisiones reales (tarea de Claude o lanzador de respaldo) se marcan como "programada";
+# las pruebas y revisiones manuales no cuentan para evitar duplicados.
+run-name: ${{ inputs.origen == 'programado' && 'Revision programada frentes' || 'Validacion Frentes Frios Sipacate' }}
 
 # VALIDACION: si hay senales de frente frio, envia el resumen SOLO a los chats personales
 # del secret TELEGRAM_CHAT_ID; si no hay senales, no envia nada. Nunca guarda nada en el repo.
@@ -10,6 +13,10 @@ on:
     branches: [validacion-frentes]
   workflow_dispatch:
     inputs:
+      origen:
+        description: 'programado = revision real cada 12 h (tarea de Claude o lanzador)'
+        required: false
+        default: ''
       solo_mostrar:
         description: '1 = solo mostrar en el log, sin enviar a Telegram'
         required: false
