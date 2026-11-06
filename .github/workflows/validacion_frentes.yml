@@ -21,6 +21,10 @@ on:
         description: '1 = solo mostrar en el log, sin enviar a Telegram'
         required: false
         default: ''
+      listar:
+        description: '1 = enviarme la lista de personas que tocaron Iniciar (con su chat id)'
+        required: false
+        default: ''
       prueba:
         description: '1 = PRUEBA con datos simulados (solo al chat personal)'
         required: false
@@ -61,5 +65,7 @@ jobs:
           SOLO_MOSTRAR: ${{ inputs.solo_mostrar }}
           EMITIR_GRUPO: ${{ inputs.emitir_grupo }}
           PRUEBA: ${{ inputs.prueba }}
+          LISTAR: ${{ inputs.listar }}
+          TELEGRAM_VALIDACION: ${{ secrets.TELEGRAM_VALIDACION }}
           GITHUB_TOKEN: ${{ github.token }}
         run: python 8_Validacion_Frentes.py

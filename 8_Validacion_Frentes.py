@@ -706,10 +706,55 @@ def partir_mensaje(texto, limite=3900):
     return [p_ if len(p_) <= 4096 else p_[:4000] + "…" for p_ in partes]
 
 
+def destinatarios_validacion():
+    """Quién recibe los avisos de validación: el secret TELEGRAM_VALIDACION (ids elegidos por el ICC);
+    si no existe, los chats personales de TELEGRAM_CHAT_ID. Nunca el grupo ni los suscriptores."""
+    lista = os.environ.get("TELEGRAM_VALIDACION", "") or os.environ.get("TELEGRAM_CHAT_ID", "")
+    return [c for c in dict.fromkeys(re.findall(r"-?\d+", lista)) if not c.startswith("-")]
+
+
+def listar_suscriptores():
+    """Envía al dueño (chats personales de TELEGRAM_CHAT_ID) la lista de personas que tocaron Iniciar,
+    con su chat id, para elegir quién recibe la validación. No guarda nada."""
+    import requests
+    token = al._token()
+    duenos = [c for c in re.findall(r"-?\d+", os.environ.get("TELEGRAM_CHAT_ID", "")) if not c.startswith("-")]
+    grupo = next((c for c in re.findall(r"-?\d+", os.environ.get("TELEGRAM_CHAT_ID", "")) if c.startswith("-")), None)
+    r = requests.get("https://raw.githubusercontent.com/ferescobedo369-max/PronosticoSipacate/main/"
+                     "3_Suscriptores/suscriptores.enc", timeout=30)
+    if r.ok:
+        os.makedirs(os.path.dirname(al.ARCHIVO_SUSCRIPTORES), exist_ok=True)
+        with open(al.ARCHIVO_SUSCRIPTORES, "wb") as f:
+            f.write(r.content)
+    subs = al.cargar_suscriptores(token)
+    api = al._api(token)
+    nuevos = al.registrar_nuevos(api, subs)            # incluye a quienes tocaron Iniciar hoy (no se guarda)
+    validacion = set(destinatarios_validacion())
+    l = ["👥 <b>Personas que tocaron Iniciar en el bot</b>", ""]
+    for cid, d in sorted(subs["personas"].items(), key=lambda x: x[1].get("nombre", "").lower()):
+        estado = ""
+        if grupo:
+            m = api("getChatMember", chat_id=grupo, user_id=cid)
+            st = m.get("result", {}).get("status") if m.get("ok") else None
+            estado = " · en el grupo" if st in al.ESTADOS_MIEMBRO else " · <i>no está en el grupo</i>"
+        marca = " · ✅ recibe validación" if cid in validacion else ""
+        nuevo = " · 🆕" if cid in nuevos else ""
+        l.append(f"• {html.escape(d.get('nombre') or 'sin nombre')}: <code>{cid}</code>{estado}{marca}{nuevo}")
+    if not subs["personas"]:
+        l.append("Todavía nadie ha tocado Iniciar.")
+    l += ["", "Para que alguien reciba los avisos de validación, agrega su número al secret "
+              "<b>TELEGRAM_VALIDACION</b> (separados por coma, incluyendo el tuyo)."]
+    texto = "\n".join(l)
+    print(texto)
+    for c in duenos:
+        post_telegram(f"https://api.telegram.org/bot{token}/sendMessage",
+                      data={"chat_id": c, "text": texto, "parse_mode": "HTML"})
+
+
 def enviar_validacion(textos, fotos, animaciones=()):
     import requests
     token = al._token()
-    chats = [c for c in re.findall(r"-?\d+", os.environ.get("TELEGRAM_CHAT_ID", "")) if not c.startswith("-")]
+    chats = destinatarios_validacion()
     if os.environ.get("SOLO_MOSTRAR") == "1" or not token or not chats:
         print("No se envía (SOLO_MOSTRAR o sin token/chat personal).")
         return False
@@ -966,6 +1011,9 @@ def datos_prueba(ahora):
 
 
 def main():
+    if os.environ.get("LISTAR") == "1":              # solo la lista de personas, sin pronóstico
+        listar_suscriptores()
+        return
     ahora = pd.Timestamp.now(tz=TZ)
     hoy = ahora.normalize()
     puntos = al.puntos_del_area(os.path.join(BASE, "1_Shapefile", "Area_of_interest.shp"))
