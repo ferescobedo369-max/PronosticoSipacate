@@ -240,6 +240,30 @@ def historial_probabilidad(dias=5):
     return sorted(set(hist))
 
 
+def boletin_ya_mostrado(num, horas=30):
+    """¿Ya se envió este mismo boletín del INSIVUMEH en una revisión anterior? (marca INSIV_MOSTRADO en los logs)"""
+    import requests
+    tok, repo, yo = os.environ.get("GITHUB_TOKEN"), os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_RUN_ID")
+    if not num or not tok or not repo:
+        return False
+    h = {"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"}
+    desde = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=horas)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        runs = requests.get(f"https://api.github.com/repos/{repo}/actions/workflows/validacion_frentes.yml/runs",
+                            headers=h, params={"created": f">={desde}", "per_page": 20}, timeout=30).json()
+        for run in runs.get("workflow_runs", []):
+            if str(run["id"]) == str(yo) or run.get("conclusion") != "success":
+                continue
+            for j in requests.get(run["jobs_url"], headers=h, timeout=30).json().get("jobs", []):
+                log = requests.get(f"https://api.github.com/repos/{repo}/actions/jobs/{j['id']}/logs",
+                                   headers=h, timeout=60).text
+                if f"INSIV_MOSTRADO {num}" in log:
+                    return True
+    except Exception as e:
+        print(f"⚠ No se pudo revisar si el boletín ya se mostró: {e!r}")
+    return False
+
+
 def grafica_evolucion(hist, ruta, titulo_extra=""):
     """Gráfica de líneas: cómo cambia la probabilidad en cada revisión (cada 12 h)."""
     import matplotlib
@@ -601,6 +625,7 @@ def texto_pronostico_insivumeh():
         if f_bol < pd.Timestamp.now(tz=TZ).normalize():
             l.append(f"• ⚠️ <b>El boletín es del {fecha.group(0).lower()}: no se ha actualizado.</b> "
                      "Revisar si el INSIVUMEH cambió el enlace.")
+    PDF_INSIVUMEH["num"] = num.group(0).replace(" ", "") if num else ""
     PDF_INSIVUMEH["titulo"] = " · ".join(x for x in [num.group(0) if num else "",
                                                     fecha.group(0).lower() if fecha else ""] if x)
     persp = re.search(r"Condiciones y perspectiva:\s*(.+?[.])", plano)
@@ -982,6 +1007,13 @@ def main():
     if prueba:
         cab = ("🧪 <b>PRUEBA con datos simulados</b> – no es un pronóstico real. "
                "Solo se envió a tu chat personal.\n\n" + cab)
+    # El boletín del INSIVUMEH sale una vez al día: si ya se mostró, solo una línea
+    boletin_nuevo = True
+    num_bol = PDF_INSIVUMEH.get("num")
+    if not prueba and num_bol and boletin_ya_mostrado(num_bol):
+        boletin_nuevo = False
+        t_pron = (f"🇬🇹 <b>INSIVUMEH</b>: mismo boletín {num_bol} de la revisión anterior, sin cambios"
+                  + (" (sigue mencionando frente frío o viento del norte en la costa)." if insiv_si else "."))
     resumen = "\n\n".join([x for x in [cab, t_prob, t_ecmwf, t_noaa, t_pron, pie,
                             "🗺️ Abajo: gráfica de probabilidad, gráfica del modelo, mapa de la NOAA "
                             "(frente frío = línea azul con triángulos) e imagen satelital del INSIVUMEH."] if x])
@@ -1018,6 +1050,8 @@ def main():
 
     for t in textos:
         print(t + "\n" + "-" * 60)
+    if boletin_nuevo and not prueba and os.environ.get("SOLO_MOSTRAR") != "1":
+        print(f"INSIV_MOSTRADO {PDF_INSIVUMEH.get('num')}")    # para no repetirlo en la próxima revisión
     enviar_validacion(textos, fotos, animaciones)
 
 
