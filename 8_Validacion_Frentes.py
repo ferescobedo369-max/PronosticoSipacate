@@ -32,6 +32,7 @@ TZ = al.TZ
 
 URL_MAPA_NOAA = "https://www.nhc.noaa.gov/tafb_latest/USA_latest.gif"
 URL_SAT_INSIVUMEH = "https://insivumeh.gob.gt/img/guate_truecolor.png"        # GOES-19 color verdadero
+URL_ANIM_INSIVUMEH = "https://insivumeh.gob.gt/img/guate_TrueColor.gif"       # animación de las últimas horas
 URL_BOLETIN_INSIVUMEH = "https://insivumeh.gob.gt/img/Papa_Bravo/Papa_iFoxtrot/Boletin_Informativo.pdf"
 URL_PRONOSTICO_INSIVUMEH = "https://insivumeh.gob.gt/img/Papa_Bravo/Papa_Noviembre/pronostico_diario.pdf"
 # El boletín PDF del INSIVUMEH (nov-2026) es del 23-abr y casi no tiene texto (es imagen):
@@ -494,6 +495,31 @@ def descargar_imagen(url, ruta):
     return False
 
 
+def descargar_animacion(url, ruta):
+    """Descarga la animación GIF del satélite; devuelve un texto con su información o None."""
+    import requests
+    from PIL import Image
+    try:
+        r = requests.get(url, headers=UA, timeout=90)
+        if not r.ok or not r.content.startswith(b"GIF"):
+            print(f"⚠ Animación {url}: respuesta {r.status_code}, {len(r.content)} bytes")
+            return None
+        with open(ruta, "wb") as f:
+            f.write(r.content)
+        img = Image.open(io.BytesIO(r.content))
+        n = getattr(img, "n_frames", 1)
+        mb = len(r.content) / 1e6
+        info = f"{n} imágenes, {img.size[0]}x{img.size[1]}, {mb:.1f} MB"
+        print(f"✓ Animación {url}: {info} · Last-Modified: {r.headers.get('Last-Modified')}")
+        if mb > 45:
+            print("⚠ Animación muy pesada para Telegram: no se envía")
+            return None
+        return info
+    except Exception as e:
+        print(f"⚠ No se pudo descargar la animación: {e!r}")
+        return None
+
+
 def texto_insivumeh():
     """Boletín informativo del INSIVUMEH (PDF): fecha y frases sobre frentes fríos o nortes."""
     import requests
@@ -623,7 +649,7 @@ def partir_mensaje(texto, limite=3900):
     return [p_ if len(p_) <= 4096 else p_[:4000] + "…" for p_ in partes]
 
 
-def enviar_validacion(textos, fotos):
+def enviar_validacion(textos, fotos, animaciones=()):
     import requests
     token = al._token()
     chats = [c for c in re.findall(r"-?\d+", os.environ.get("TELEGRAM_CHAT_ID", "")) if not c.startswith("-")]
@@ -642,6 +668,11 @@ def enviar_validacion(textos, fotos):
                 r = requests.post(f"{url}/sendPhoto", data={"chat_id": chat, "caption": cap},
                                   files={"photo": f}, timeout=60)
             print(f"{'✓' if r.ok else '✗'} imagen a {chat} {'' if r.ok else r.text}")
+        for ruta, cap in animaciones:
+            with open(ruta, "rb") as f:
+                r = requests.post(f"{url}/sendAnimation", data={"chat_id": chat, "caption": cap},
+                                  files={"animation": ("satelite_insivumeh.gif", f, "image/gif")}, timeout=120)
+            print(f"{'✓' if r.ok else '✗'} animación a {chat} {'' if r.ok else r.text}")
 
 
 def detectar_para_emitir(area, ahora):
@@ -938,14 +969,20 @@ def main():
     m = os.path.join(BASE, "_mapa_noaa.png")
     if descargar_imagen(URL_MAPA_NOAA, m):
         fotos.append((m, "NOAA – Análisis de superficie más reciente (frente frío = línea azul con triángulos)"))
-    sat = os.path.join(BASE, "_satelite_insivumeh.png")
-    if descargar_imagen(URL_SAT_INSIVUMEH, sat):
-        fotos.append((sat, "INSIVUMEH – GOES-19 color verdadero (Guatemala). Un frente suele verse como "
-                           "una banda larga de nubes que baja desde el Golfo de México"))
+    animaciones = []
+    anim = os.path.join(BASE, "_satelite_insivumeh.gif")
+    if descargar_animacion(URL_ANIM_INSIVUMEH, anim):
+        animaciones.append((anim, "INSIVUMEH – GOES-19 color verdadero, animación de las últimas horas. Un frente "
+                                  "suele verse como una banda larga de nubes que avanza desde el norte"))
+    else:
+        sat = os.path.join(BASE, "_satelite_insivumeh.png")
+        if descargar_imagen(URL_SAT_INSIVUMEH, sat):
+            fotos.append((sat, "INSIVUMEH – GOES-19 color verdadero (Guatemala). Un frente suele verse como "
+                               "una banda larga de nubes que baja desde el Golfo de México"))
 
     for t in textos:
         print(t + "\n" + "-" * 60)
-    enviar_validacion(textos, fotos)
+    enviar_validacion(textos, fotos, animaciones)
 
 
 if __name__ == "__main__":
