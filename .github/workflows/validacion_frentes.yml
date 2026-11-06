@@ -56,3 +56,15 @@ jobs:
           PRUEBA: ${{ inputs.prueba }}
           GITHUB_TOKEN: ${{ github.token }}
         run: python 8_Validacion_Frentes.py
+
+      - name: Avisar por Telegram si la revision fallo
+        if: failure()
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          for c in $(echo "$TELEGRAM_CHAT_ID" | tr ',' '\n' | grep -E '^[0-9]+$'); do
+            curl -s -o /dev/null "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=$c" \
+              --data-urlencode "text=⚠️ Falló la revisión de frentes fríos. Detalle: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          done

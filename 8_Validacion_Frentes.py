@@ -138,7 +138,7 @@ def grafica(area, ev, ruta):
 URL_ENSAMBLE = "https://ensemble-api.open-meteo.com/v1/ensemble"
 MODELOS_ENSAMBLE = ["ecmwf_ifs025", "gfs025"]          # si el ECMWF no responde, se usa el GFS
 P_MIN_AVISO = 10           # % mínimo del ensamble para avisar al chat personal
-P_GRUPO = 90               # % del ensamble para avisar al grupo automáticamente
+P_GRUPO = 90               # % del ensamble para pedir al ICC que valide el envío al grupo
 HORAS_ENTRE_AVISOS_GRUPO = 20   # máximo un aviso al grupo por día (se revisa cada 12 h)
 
 
@@ -281,7 +281,7 @@ def grafica_evolucion(hist, ruta, titulo_extra=""):
     for i, v in enumerate(p):
         ax.text(i, v + 5, f"{v:.0f} %", ha="center", fontsize=9, fontweight="bold")
     ax.axhline(P_GRUPO, color="#c62828", ls="--", lw=.9)
-    ax.text(-.3, P_GRUPO + 2, f"{P_GRUPO} %: se avisa al grupo", color="#c62828", fontsize=8.5)
+    ax.text(-.3, P_GRUPO + 2, f"{P_GRUPO} %: revisión para el grupo", color="#c62828", fontsize=8.5)
     ax.set_xticks(x)
     ax.set_xticklabels(etiquetas, fontsize=8)
     ax.set_xlim(-.6, max(len(x) - .4, 3))
@@ -325,7 +325,7 @@ def grafica_probabilidad(prob, mostrada, ruta):
     ax.set_ylim(0, 110)
     ax.set_ylabel("Probabilidad acumulada (%)")
     ax.axhline(P_GRUPO, color="#c62828", lw=.8, ls="--")
-    ax.text(-.45, P_GRUPO + 2, f"aviso al grupo ({P_GRUPO} %)", ha="left", fontsize=8,
+    ax.text(-.45, P_GRUPO + 2, f"revisión para el grupo ({P_GRUPO} %)", ha="left", fontsize=8,
             color="#c62828", bbox=dict(facecolor="white", edgecolor="none", pad=1))
     ax.set_title(f"Probabilidad estimada de llegada de frente frío: {mostrada:.0f} % sí · {100 - mostrada:.0f} % no",
                  fontsize=11)
@@ -981,29 +981,39 @@ def main():
 
     hist = (hist_prueba if prueba else historial_probabilidad()) + [(ahora, float(mostrada))]
 
-    # Al grupo: ensamble >= 90 %, máximo un aviso al día (nunca en la prueba)
-    al_grupo, motivo = False, ""
-    if p_ens >= P_GRUPO and not prueba:
-        hrs = horas_desde_ultimo_aviso_grupo()
-        if hrs is not None and hrs < HORAS_ENTRE_AVISOS_GRUPO:
-            motivo = f"ya se avisó al grupo hace {hrs:.0f} h; la próxima actualización sale en la revisión de mañana"
-        elif detectar_para_emitir(area, ahora) is None:
-            motivo = "el modelo principal no muestra viento del norte para llenar la alerta; revisarlo juntos"
-        else:
-            al_grupo = True
-            print(f"Probabilidad {p_ens:.0f} % >= {P_GRUPO} %: se avisa al grupo.")
-            emitir_al_grupo(area, ahora, prob, mostrada, hist)
-
+    # A 90 % NO se envía al grupo: llega al usuario para validar, con una recomendación.
+    # El envío al grupo lo autoriza el ICC («emite la alerta de frente frío»).
+    revisar = p_ens >= P_GRUPO
     marcas = " · ".join(f"{n} {'✅' if v else '❌'}" for n, v in senales.items())
     color = "🔴" if mostrada >= P_GRUPO else "🟠" if mostrada >= 40 else "🟡"
-    cab = (f"{color} <b>POSIBLE LLEGADA DE FRENTE FRÍO – probabilidad {mostrada:.0f} %</b>"
-           + ("" if al_grupo else " · favor de darle seguimiento") + "\n"
-           + ("<i>✅ El aviso ya se envió al grupo.</i>" if al_grupo else
-              f"<i>Solo para ti: no se envió al grupo{' (' + motivo + ')' if motivo else ''}.</i>")
-           + f"\nSeñales: {marcas}")
-    pie = None if al_grupo else (
-        f"👉 Se avisará al grupo automáticamente cuando la probabilidad llegue a {P_GRUPO} %. "
-        "Si quieres emitirlo antes, escríbeme en Claude <b>«emite la alerta de frente frío»</b>.")
+    if revisar:
+        hrs = None if prueba else horas_desde_ultimo_aviso_grupo()
+        oficiales = [n for n, si in [("NOAA", noaa_cerca), ("INSIVUMEH", insiv_si)] if si]
+        llenable = detectar_para_emitir(area, ahora) is not None
+        if hrs is not None and hrs < HORAS_ENTRE_AVISOS_GRUPO:
+            reco = (f"ℹ️ Ya se envió una alerta al grupo hace {hrs:.0f} h. Si quieres mandar una actualización, "
+                    "escríbeme en Claude <b>«emite la alerta de frente frío»</b>.")
+        elif not llenable:
+            reco = ("⚠️ <b>Recomendación: esperar.</b> El ensamble da probabilidad alta, pero el modelo principal "
+                    "todavía no muestra viento del norte en Sipacate para llenar la alerta. Revisar en la próxima revisión.")
+        elif bool(ev) and oficiales:
+            reco = (f"✅ <b>Recomendación: enviar al grupo.</b> Lo detectan el ensamble ({p_ens:.0f} %) y el modelo "
+                    f"principal, y lo confirma: {', '.join(oficiales)}.")
+        elif bool(ev):
+            reco = ("🟡 <b>Recomendación: revisar antes de enviar.</b> El ensamble y el modelo lo detectan, pero la NOAA "
+                    "y el INSIVUMEH todavía no lo mencionan. Revisa el mapa y la animación.")
+        else:
+            reco = ("🟡 <b>Recomendación: revisar antes de enviar.</b> El ensamble lo detecta, pero el modelo principal "
+                    "aún no marca el frente con todos los criterios.")
+        cab = (f"🔴 <b>POSIBLE LLEGADA DE FRENTE FRÍO – probabilidad {mostrada:.0f} %</b> · <b>para revisar y validar</b>\n"
+               f"<i>Solo para ti: no se envió al grupo.</i>\nSeñales: {marcas}")
+        pie = (reco + "\n👉 Si decides enviarlo, escríbeme en Claude <b>«emite la alerta de frente frío»</b> y lo mando "
+               "al grupo con el mensaje, las 2 gráficas de probabilidad y la animación del satélite.")
+    else:
+        cab = (f"{color} <b>POSIBLE LLEGADA DE FRENTE FRÍO – probabilidad {mostrada:.0f} %</b> · favor de darle seguimiento\n"
+               f"<i>Solo para ti: no se envió al grupo.</i>\nSeñales: {marcas}")
+        pie = (f"👉 Cuando la probabilidad llegue a {P_GRUPO} % te aviso para que lo revises y decidas si se envía al grupo.")
+    al_grupo = False
     if prueba:
         cab = ("🧪 <b>PRUEBA con datos simulados</b> – no es un pronóstico real. "
                "Solo se envió a tu chat personal.\n\n" + cab)
