@@ -669,6 +669,29 @@ def fila_estacion(plano, lugar):
 # -------------------------------------------------------------------------
 # 3. Envío solo a chats personales
 # -------------------------------------------------------------------------
+def post_telegram(url, intentos=4, **kw):
+    """POST a Telegram con reintentos (cortes momentáneos de red). Nunca lanza excepción."""
+    import time
+    import requests
+    for k in range(intentos):
+        try:
+            for v in (kw.get("files") or {}).values():          # rebobinar archivos en cada intento
+                f = v[1] if isinstance(v, tuple) else v
+                if hasattr(f, "seek"):
+                    f.seek(0)
+            r = requests.post(url, timeout=kw.pop("timeout", 60) if k == 0 else 90, **kw)
+            if r.ok or r.status_code in (400, 403):            # 400/403 no se arreglan reintentando
+                return r
+            print(f"⚠ Telegram respondió {r.status_code}, reintento {k + 1}")
+        except Exception as e:
+            print(f"⚠ Telegram no respondió ({type(e).__name__}), reintento {k + 1}")
+        time.sleep(10 * (k + 1))
+
+    class _Fallo:
+        ok, status_code, text = False, 0, "sin respuesta"
+    return _Fallo()
+
+
 def partir_mensaje(texto, limite=3900):
     """Telegram acepta hasta 4096 caracteres: divide por párrafos (sin cortar etiquetas HTML)."""
     partes, actual = [], ""
@@ -689,24 +712,27 @@ def enviar_validacion(textos, fotos, animaciones=()):
     chats = [c for c in re.findall(r"-?\d+", os.environ.get("TELEGRAM_CHAT_ID", "")) if not c.startswith("-")]
     if os.environ.get("SOLO_MOSTRAR") == "1" or not token or not chats:
         print("No se envía (SOLO_MOSTRAR o sin token/chat personal).")
-        return
+        return False
+    entregado = False
     url = f"https://api.telegram.org/bot{token}"
     textos = [p_ for t in textos for p_ in partir_mensaje(t)]
     for chat in chats:
         for t in textos:
-            r = requests.post(f"{url}/sendMessage", data={"chat_id": chat, "text": t, "parse_mode": "HTML",
+            r = post_telegram(f"{url}/sendMessage", data={"chat_id": chat, "text": t, "parse_mode": "HTML",
                                                           "disable_web_page_preview": "true"}, timeout=30)
+            entregado = entregado or r.ok
             print(f"{'✓' if r.ok else '✗'} texto a {chat} {'' if r.ok else r.text}")
         for ruta, cap in fotos:
             with open(ruta, "rb") as f:
-                r = requests.post(f"{url}/sendPhoto", data={"chat_id": chat, "caption": cap},
+                r = post_telegram(f"{url}/sendPhoto", data={"chat_id": chat, "caption": cap},
                                   files={"photo": f}, timeout=60)
             print(f"{'✓' if r.ok else '✗'} imagen a {chat} {'' if r.ok else r.text}")
         for ruta, cap in animaciones:
             with open(ruta, "rb") as f:
-                r = requests.post(f"{url}/sendAnimation", data={"chat_id": chat, "caption": cap},
+                r = post_telegram(f"{url}/sendAnimation", data={"chat_id": chat, "caption": cap},
                                   files={"animation": ("satelite_insivumeh.gif", f, "image/gif")}, timeout=120)
             print(f"{'✓' if r.ok else '✗'} animación a {chat} {'' if r.ok else r.text}")
+    return entregado
 
 
 def detectar_para_emitir(area, ahora):
@@ -823,7 +849,7 @@ def emitir_al_grupo(area, ahora, prob=None, probabilidad=None, hist=None):
         print(aviso)
         if not solo_mostrar:
             for c in personales:
-                requests.post(f"{url}/sendMessage", data={"chat_id": c, "text": aviso, "parse_mode": "HTML"}, timeout=30)
+                post_telegram(f"{url}/sendMessage", data={"chat_id": c, "text": aviso, "parse_mode": "HTML"}, timeout=30)
         raise SystemExit(1)
 
     alerta = mensaje_grupo(ev, ahora, probabilidad)
@@ -876,32 +902,32 @@ def emitir_al_grupo(area, ahora, prob=None, probabilidad=None, hist=None):
 
     enviados = 0
     for c in destinos:
-        r = requests.post(f"{url}/sendMessage", data={"chat_id": c, "text": alerta, "parse_mode": "HTML",
+        r = post_telegram(f"{url}/sendMessage", data={"chat_id": c, "text": alerta, "parse_mode": "HTML",
                                                       "disable_web_page_preview": "true"}, timeout=30)
         ok = r.ok
         if ok and ge:
             with open(ge, "rb") as fimg:
-                requests.post(f"{url}/sendPhoto", data={"chat_id": c, "caption": "Evolución de la probabilidad "
+                post_telegram(f"{url}/sendPhoto", data={"chat_id": c, "caption": "Evolución de la probabilidad "
                               "de llegada de frente frío en cada revisión."}, files={"photo": fimg}, timeout=60)
         if ok and gp:
             with open(gp, "rb") as fimg:
-                requests.post(f"{url}/sendPhoto", data={"chat_id": c, "caption": "Probabilidad estimada de llegada "
+                post_telegram(f"{url}/sendPhoto", data={"chat_id": c, "caption": "Probabilidad estimada de llegada "
                               "de frente frío. Pronóstico, puede cambiar."},
                               files={"photo": fimg}, timeout=60)
         if ok and ir:
             with open(ir, "rb") as fanim:
-                requests.post(f"{url}/sendAnimation", data={"chat_id": c, "caption": "🛰️ Satélite GOES-19 "
+                post_telegram(f"{url}/sendAnimation", data={"chat_id": c, "caption": "🛰️ Satélite GOES-19 "
                               "(INSIVUMEH) – infrarrojo de Centroamérica, últimas horas: movimiento de las nubes."},
                               files={"animation": ("satelite_centroamerica.gif", fanim, "image/gif")}, timeout=120)
         if ok and PDF_INSIVUMEH.get("bytes"):
             cap = "📄 Pronóstico diario del INSIVUMEH" + (f" – {PDF_INSIVUMEH.get('titulo')}" if PDF_INSIVUMEH.get("titulo") else "")
-            requests.post(f"{url}/sendDocument", data={"chat_id": c, "caption": cap},
+            post_telegram(f"{url}/sendDocument", data={"chat_id": c, "caption": cap},
                           files={"document": ("Pronostico_diario_INSIVUMEH.pdf", PDF_INSIVUMEH["bytes"],
                                               "application/pdf")}, timeout=60)
         enviados += ok
         print(f"{'✓' if ok else '✗'} alerta a {c}")
     for c in personales:
-        requests.post(f"{url}/sendMessage", data={"chat_id": c, "parse_mode": "HTML",
+        post_telegram(f"{url}/sendMessage", data={"chat_id": c, "parse_mode": "HTML",
                       "text": f"✅ <b>Alerta de frente frío emitida</b> a {enviados} destinos (grupo y chats personales)."},
                       timeout=30)
 
@@ -1060,9 +1086,11 @@ def main():
 
     for t in textos:
         print(t + "\n" + "-" * 60)
-    if boletin_nuevo and not prueba and os.environ.get("SOLO_MOSTRAR") != "1":
+    entregado = enviar_validacion(textos, fotos, animaciones)
+    if entregado and boletin_nuevo and not prueba and os.environ.get("SOLO_MOSTRAR") != "1":
         print(f"INSIV_MOSTRADO {PDF_INSIVUMEH.get('num')}")    # para no repetirlo en la próxima revisión
-    enviar_validacion(textos, fotos, animaciones)
+    if not entregado and os.environ.get("SOLO_MOSTRAR") != "1":
+        raise SystemExit("No se pudo entregar el aviso por Telegram")
 
 
 if __name__ == "__main__":
