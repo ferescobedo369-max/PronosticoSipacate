@@ -462,7 +462,7 @@ def texto_noaa():
             for f in fr[:4]:
                 l.append(f"   ▸ <b>{html.escape(resumen_es(f))}</b>")
                 es = traducir(f)
-                detalle = (f"Traducción: {html.escape(es)}\n\n" if es else "") + f"Original: {html.escape(f)}"
+                detalle = (f"Traducción: {html.escape(es)}\n" if es else "") + f"Original: {html.escape(f)}"
                 l.append(f"<blockquote expandable>{detalle}</blockquote>")
         else:
             l.append("   sin menciones de frentes fríos cerca de la región")
@@ -609,6 +609,20 @@ def fila_estacion(plano, lugar):
 # -------------------------------------------------------------------------
 # 3. Envío solo a chats personales
 # -------------------------------------------------------------------------
+def partir_mensaje(texto, limite=3900):
+    """Telegram acepta hasta 4096 caracteres: divide por párrafos (sin cortar etiquetas HTML)."""
+    partes, actual = [], ""
+    for bloque in texto.split("\n\n"):
+        if actual and len(actual) + len(bloque) + 2 > limite:
+            partes.append(actual)
+            actual = bloque
+        else:
+            actual = f"{actual}\n\n{bloque}" if actual else bloque
+    if actual:
+        partes.append(actual)
+    return [p_ if len(p_) <= 4096 else p_[:4000] + "…" for p_ in partes]
+
+
 def enviar_validacion(textos, fotos):
     import requests
     token = al._token()
@@ -617,6 +631,7 @@ def enviar_validacion(textos, fotos):
         print("No se envía (SOLO_MOSTRAR o sin token/chat personal).")
         return
     url = f"https://api.telegram.org/bot{token}"
+    textos = [p_ for t in textos for p_ in partir_mensaje(t)]
     for chat in chats:
         for t in textos:
             r = requests.post(f"{url}/sendMessage", data={"chat_id": chat, "text": t, "parse_mode": "HTML",
