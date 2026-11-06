@@ -32,7 +32,9 @@ TZ = al.TZ
 
 URL_MAPA_NOAA = "https://www.nhc.noaa.gov/tafb_latest/USA_latest.gif"
 URL_SAT_INSIVUMEH = "https://insivumeh.gob.gt/img/guate_truecolor.png"        # GOES-19 color verdadero
-URL_ANIM_INSIVUMEH = "https://insivumeh.gob.gt/img/guate_TrueColor.gif"       # animación de las últimas horas
+URL_ANIM_INSIVUMEH = "https://insivumeh.gob.gt/img/guate_TrueColor.gif"       # Guatemala, color verdadero (de día)
+URL_ANIM_IR_CA = "https://insivumeh.gob.gt/img/ca_Infrarrojo.gif"             # Centroamérica, infrarrojo (día y noche)
+URL_ANIM_FIRE_CA = "https://insivumeh.gob.gt/img/ca_FireTemp.gif"             # Centroamérica, temperatura de fuego
 URL_BOLETIN_INSIVUMEH = "https://insivumeh.gob.gt/img/Papa_Bravo/Papa_iFoxtrot/Boletin_Informativo.pdf"
 URL_PRONOSTICO_INSIVUMEH = "https://insivumeh.gob.gt/img/Papa_Bravo/Papa_Noviembre/pronostico_diario.pdf"
 # El boletín PDF del INSIVUMEH (nov-2026) es del 23-abr y casi no tiene texto (es imagen):
@@ -510,6 +512,16 @@ def descargar_animacion(url, ruta):
         n = getattr(img, "n_frames", 1)
         mb = len(r.content) / 1e6
         info = f"{n} imágenes, {img.size[0]}x{img.size[1]}, {mb:.1f} MB"
+        if os.environ.get("SOLO_MOSTRAR") == "1":
+            import base64
+            for k in sorted({0, n - 1}):
+                img.seek(k)
+                fr = img.convert("RGB")
+                fr.thumbnail((1200, 1200))
+                b = io.BytesIO()
+                fr.save(b, "JPEG", quality=70)
+                nombre = os.path.basename(ruta).replace(".gif", f"_cuadro{k}.png")
+                print(f"IMG_B64 {nombre} {base64.b64encode(b.getvalue()).decode()}")
         print(f"✓ Animación {url}: {info} · Last-Modified: {r.headers.get('Last-Modified')}")
         if mb > 45:
             print("⚠ Animación muy pesada para Telegram: no se envía")
@@ -970,8 +982,14 @@ def main():
     if descargar_imagen(URL_MAPA_NOAA, m):
         fotos.append((m, "NOAA – Análisis de superficie más reciente (frente frío = línea azul con triángulos)"))
     animaciones = []
+    ir = os.path.join(BASE, "_satelite_ir_ca.gif")
+    if descargar_animacion(URL_ANIM_IR_CA, ir):
+        animaciones.append((ir, "INSIVUMEH – Infrarrojo Centroamérica (día y noche), últimas horas. Un frente "
+                                "suele verse como una banda larga de nubes que avanza desde el Golfo de México"))
+    fire = os.path.join(BASE, "_satelite_fire_ca.gif")
+    descargar_animacion(URL_ANIM_FIRE_CA, fire)          # por ahora solo se revisa (no se envía)
     anim = os.path.join(BASE, "_satelite_insivumeh.gif")
-    if descargar_animacion(URL_ANIM_INSIVUMEH, anim):
+    if 6 <= ahora.hour < 18 and descargar_animacion(URL_ANIM_INSIVUMEH, anim):
         animaciones.append((anim, "INSIVUMEH – GOES-19 color verdadero, animación de las últimas horas. Un frente "
                                   "suele verse como una banda larga de nubes que avanza desde el norte"))
     else:
