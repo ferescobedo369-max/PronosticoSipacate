@@ -136,8 +136,8 @@ def grafica(area, ev, ruta):
 URL_ENSAMBLE = "https://ensemble-api.open-meteo.com/v1/ensemble"
 MODELOS_ENSAMBLE = ["ecmwf_ifs025", "gfs025"]          # si el ECMWF no responde, se usa el GFS
 P_MIN_AVISO = 10           # % mínimo del ensamble para avisar al chat personal
-P_CONFIRMADO = 80          # % del ensamble para considerar el frente confirmado (con fuente oficial)
-HORAS_CONFIRMADO = 48      # el frente confirmado debe llegar dentro de estas horas (o ya estar)
+P_GRUPO = 90               # % del ensamble para avisar al grupo automáticamente
+HORAS_ENTRE_AVISOS_GRUPO = 20   # máximo un aviso al grupo por día (se revisa cada 12 h)
 
 
 def descargar_ensamble(lat, lon):
@@ -217,7 +217,8 @@ def texto_probabilidad(prob, mostrada):
     if not prob:
         return "📈 <b>Probabilidad</b>: no se pudo calcular hoy (ensamble no disponible)"
     nombre = "ECMWF" if prob["modelo"].startswith("ecmwf") else "GFS"
-    l = [f"📈 <b>Probabilidad de frente frío en Sipacate</b> (próximos {al.FF_DIAS_ADELANTE} días): "
+    l = [f"📈 <b>Probabilidad estimada de llegada de frente frío</b> (zona de Sipacate, próximos "
+         f"{al.FF_DIAS_ADELANTE} días): "
          f"<b>{mostrada:.0f} %</b> · {100 - mostrada:.0f} % de que no se presente"]
     l.append("   Acumulada (a más tardar ese día): " + " · ".join(f"{al.fecha_txt(d)[:3]} {d:%d}: {p:.0f} %"
                                           for d, p in prob["por_dia"].items()))
@@ -240,11 +241,12 @@ def grafica_probabilidad(prob, mostrada, ruta):
         ax.text(r_.get_x() + r_.get_width() / 2, v + 2, f"{v:.0f} %", ha="center", fontsize=10, fontweight="bold")
     ax.set_ylim(0, 110)
     ax.set_ylabel("Probabilidad acumulada (%)")
-    ax.axhline(P_CONFIRMADO, color="#c62828", lw=.8, ls="--")
-    ax.text(-.45, P_CONFIRMADO + 2, f"umbral de confirmación ({P_CONFIRMADO} %)", ha="left", fontsize=8,
+    ax.axhline(P_GRUPO, color="#c62828", lw=.8, ls="--")
+    ax.text(-.45, P_GRUPO + 2, f"aviso al grupo ({P_GRUPO} %)", ha="left", fontsize=8,
             color="#c62828", bbox=dict(facecolor="white", edgecolor="none", pad=1))
-    ax.set_title(f"Probabilidad de frente frío en Sipacate: {mostrada:.0f} % sí · {100 - mostrada:.0f} % no\n"
-                 "(probabilidad de que haya llegado a más tardar cada día)", fontsize=10)
+    ax.set_title(f"Probabilidad estimada de llegada de frente frío (zona de Sipacate): "
+                 f"{mostrada:.0f} % sí · {100 - mostrada:.0f} % no\n"
+                 "(probabilidad de que haya llegado a más tardar cada día · pronóstico, puede cambiar)", fontsize=9.5)
     ax.grid(axis="y", alpha=.3)
     fig.tight_layout()
     fig.savefig(ruta, dpi=110)
@@ -586,7 +588,88 @@ def detectar_para_emitir(area, ahora):
          al.FF_HORAS_NORTE, al.FF_VIENTO_MIN) = orig
 
 
-def emitir_al_grupo(area, ahora):
+def mensaje_grupo(ev, ahora, probabilidad=None):
+    """Alerta para el grupo, redactada como estimación (pronósticos que pueden cambiar)."""
+    ini = ev["inicio"]
+    f = al.fecha_txt(ini)
+    cuando = f"{f[0].lower()}{f[1:]}, alrededor de las {ini.hour:02d}:00"
+    if ev["en_curso"]:
+        intro = (f"Los pronósticos indican que continúa la influencia de un frente frío en Guatemala desde el "
+                 f"<b>{cuando}</b>, con posibles condiciones adversas para las quemas de caña de azúcar en "
+                 "Sipacate y su zona buffer.")
+    else:
+        intro = (f"Los pronósticos indican la posible llegada de un frente frío a Guatemala a partir del "
+                 f"<b>{cuando}</b>, con posibles condiciones adversas para las quemas de caña de azúcar en "
+                 "Sipacate y su zona buffer.")
+    l = ["🌬️ <b>POSIBLE LLEGADA DE FRENTE FRÍO A GUATEMALA</b>", "<b>Perspectiva climática -Sipacate-</b>"]
+    if probabilidad is not None:
+        l.append(f"📈 <b>Probabilidad estimada: {probabilidad:.0f} %</b>")
+    l += ["", "⛔ <b>Posibles condiciones adversas para las quemas</b>", intro, "",
+          "⚠️ <b>Condiciones estimadas</b>",
+          f"• <b>Duración:</b> se estima que durante unas <b>{ev['horas']} horas</b> predominen vientos con "
+          f"dirección <b>hacia el {ev['rumbo']}</b>.",
+          f"• <b>Viento:</b> velocidad promedio de <b>{ev['viento']:.0f} km/h</b> y ráfagas de hasta "
+          f"<b>{ev['rafaga']:.0f} km/h</b>."]
+    t = f"• <b>Temperatura:</b> podría descender hasta <b>{ev['tmin']:.0f} °C</b>"
+    if ev["baja_t"] >= 1:
+        t += f", unos {ev['baja_t']:.0f} °C menos que en días anteriores"
+    l.append(t + ".")
+    if ev.get("humedad") is not None and not np.isnan(ev["humedad"]):
+        l.append(f"• <b>Humedad relativa:</b> podría bajar hasta <b>{ev['humedad']:.0f} %</b>.")
+    if ev["dp"] >= 1:
+        l.append(f"• <b>Presión atmosférica:</b> aumento de <b>{ev['dp']:.0f} hPa</b>, "
+                 "una señal típica del ingreso del frente.")
+    l += ["", "📌 <b>Recomendación:</b> seguir las instrucciones emitidas por <b>ASAZGUA</b> al momento "
+              "de realizar cualquier quema durante el día.", "",
+          "🔎 El <b>ICC</b> dará seguimiento a este fenómeno y a la evolución de las condiciones "
+          "atmosféricas. Manténgase atento a este grupo para las actualizaciones."]
+    if al.LINK_PRONOSTICO:
+        # Power BI muestra hoy + 2 días: el día del frente aparece 2 días antes
+        dia_frente = max(ini.normalize(), ahora.normalize())
+        desde = dia_frente - pd.Timedelta(days=2)
+        fd = al.fecha_txt(dia_frente)
+        fd = fd[0].lower() + fd[1:]
+        if desde <= ahora.normalize():
+            pbi = f"📊 Ya puede consultar en Power BI el pronóstico de velocidad y dirección de viento para el <b>{fd}</b>:"
+        else:
+            fs = al.fecha_txt(desde)
+            pbi = (f"📊 El pronóstico de velocidad y dirección de viento para el <b>{fd}</b> podrá consultarse en "
+                   f"Power BI a partir del <b>{fs[0].lower()}{fs[1:]}</b> (desde las 6:30 a. m.), ya que muestra "
+                   "los próximos 3 días:")
+        l += ["", pbi, html.escape(al.LINK_PRONOSTICO)]
+    l += ["", "<i>Información basada en pronósticos y estimaciones, que pueden cambiar. "
+              "Se actualizará conforme evolucione el fenómeno.</i>"]
+    return "\n".join(l)
+
+
+def horas_desde_ultimo_aviso_grupo():
+    """Busca en las ejecuciones recientes de este workflow si ya se avisó al grupo
+    (líneas '✓ alerta a -...' en el log). Devuelve horas desde el último aviso, o None."""
+    import requests
+    tok, repo, yo = os.environ.get("GITHUB_TOKEN"), os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_RUN_ID")
+    if not tok or not repo:
+        return None
+    h = {"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"}
+    desde = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=36)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        runs = requests.get(f"https://api.github.com/repos/{repo}/actions/workflows/validacion_frentes.yml/runs",
+                            headers=h, params={"created": f">={desde}", "per_page": 20}, timeout=30).json()
+        for run in runs.get("workflow_runs", []):
+            if str(run["id"]) == str(yo) or run.get("conclusion") != "success":
+                continue
+            jobs = requests.get(run["jobs_url"], headers=h, timeout=30).json().get("jobs", [])
+            for j in jobs:
+                log = requests.get(f"https://api.github.com/repos/{repo}/actions/jobs/{j['id']}/logs",
+                                   headers=h, timeout=60).text
+                if re.search(r"✓ alerta a -\d+", log):
+                    t = pd.Timestamp(run["created_at"])
+                    return (pd.Timestamp.now(tz="UTC") - t).total_seconds() / 3600
+    except Exception as e:
+        print(f"⚠ No se pudo revisar avisos anteriores al grupo: {e!r}")
+    return None
+
+
+def emitir_al_grupo(area, ahora, prob=None, probabilidad=None):
     """SOLO cuando el usuario lo autoriza (EMITIR_GRUPO=1): envía la alerta de frente frío al grupo,
     a los chats del secret y a los suscriptores, junto con el pronóstico diario del INSIVUMEH."""
     import requests
@@ -606,8 +689,12 @@ def emitir_al_grupo(area, ahora):
                 requests.post(f"{url}/sendMessage", data={"chat_id": c, "text": aviso, "parse_mode": "HTML"}, timeout=30)
         raise SystemExit(1)
 
-    alerta = al.mensaje_frente_frio(ev, ahora)
+    alerta = mensaje_grupo(ev, ahora, probabilidad)
     texto_pronostico_insivumeh()                       # descarga el PDF del día
+    gp = None
+    if prob:
+        gp = os.path.join(BASE, "_grafica_probabilidad_grupo.png")
+        grafica_probabilidad(prob, probabilidad if probabilidad is not None else prob["total"], gp)
     print("ALERTA A EMITIR:\n" + alerta)
     if solo_mostrar:
         print("SOLO_MOSTRAR=1: vista previa, no se envía nada.")
@@ -641,6 +728,11 @@ def emitir_al_grupo(area, ahora):
         r = requests.post(f"{url}/sendMessage", data={"chat_id": c, "text": alerta, "parse_mode": "HTML",
                                                       "disable_web_page_preview": "true"}, timeout=30)
         ok = r.ok
+        if ok and gp:
+            with open(gp, "rb") as fimg:
+                requests.post(f"{url}/sendPhoto", data={"chat_id": c, "caption": "Probabilidad estimada de llegada "
+                              "de frente frío (zona de Sipacate). Pronóstico, puede cambiar."},
+                              files={"photo": fimg}, timeout=60)
         if ok and PDF_INSIVUMEH.get("bytes"):
             cap = "📄 Pronóstico diario del INSIVUMEH" + (f" – {PDF_INSIVUMEH.get('titulo')}" if PDF_INSIVUMEH.get("titulo") else "")
             requests.post(f"{url}/sendDocument", data={"chat_id": c, "caption": cap},
@@ -661,7 +753,8 @@ def main():
     area = al.resumir_area(al.descargar(puntos))
 
     if os.environ.get("EMITIR_GRUPO") == "1":
-        emitir_al_grupo(area, ahora)
+        prob = probabilidad_frente(puntos, hoy)
+        emitir_al_grupo(area, ahora, prob, float(round(prob["total"])) if prob else None)
         return
 
     ev = al.detectar_frente_frio(area, ahora)
@@ -672,10 +765,7 @@ def main():
     prob = probabilidad_frente(puntos, hoy)
     p_ens = prob["total"] if prob else 0.0
 
-    # ¿Confirmado? Ensamble alto + modelo principal + fuente oficial + llega pronto
-    pronto = bool(ev) and (ev["en_curso"] or (ev["inicio"] - ahora) <= pd.Timedelta(hours=HORAS_CONFIRMADO))
-    confirmado = bool(ev) and pronto and p_ens >= P_CONFIRMADO and (insiv_si or noaa_cerca)
-    mostrada = 100.0 if confirmado else min(95.0, float(round(p_ens)))
+    mostrada = float(round(p_ens))
     if mostrada == 0 and (ev or noaa_cerca or insiv_si):
         mostrada = 5.0                                      # hay alguna señal, aunque el ensamble no la vea
 
@@ -683,39 +773,46 @@ def main():
                "INSIVUMEH": insiv_si}
     t_prob = texto_probabilidad(prob, mostrada)
     if not any(senales.values()):
-        print(f"Sin señales de frente frío (probabilidad {p_ens:.0f} %): no se envía nada hoy.")
+        print(f"Sin señales de frente frío (probabilidad {p_ens:.0f} %): no se envía nada.")
         print(t_prob + "\n\n" + t_ecmwf + "\n\n" + t_noaa + "\n\n" + t_pron)
         return
 
-    if confirmado:
-        print(f"FRENTE FRÍO CONFIRMADO (ensamble {p_ens:.0f} %): se emite al grupo automáticamente.")
-        emitir_al_grupo(area, ahora)
+    # Al grupo: ensamble >= 90 %, máximo un aviso al día
+    al_grupo, motivo = False, ""
+    if p_ens >= P_GRUPO:
+        hrs = horas_desde_ultimo_aviso_grupo()
+        if hrs is not None and hrs < HORAS_ENTRE_AVISOS_GRUPO:
+            motivo = f"ya se avisó al grupo hace {hrs:.0f} h; la próxima actualización sale en la revisión de mañana"
+        elif detectar_para_emitir(area, ahora) is None:
+            motivo = "el modelo principal no muestra viento del norte para llenar la alerta; revisarlo juntos"
+        else:
+            al_grupo = True
+            print(f"Probabilidad {p_ens:.0f} % >= {P_GRUPO} %: se avisa al grupo.")
+            emitir_al_grupo(area, ahora, prob, mostrada)
 
     marcas = " · ".join(f"{n} {'✅' if v else '❌'}" for n, v in senales.items())
-    if confirmado:
-        cab = (f"🔴 <b>FRENTE FRÍO CONFIRMADO – probabilidad 100 %</b>\n"
-               f"<i>La alerta ya se envió al grupo automáticamente.</i>\nSeñales: {marcas}")
-        pie = None
-    else:
-        nivel = "🟠" if mostrada >= 40 else "🟡"
-        cab = (f"{nivel} <b>POSIBLE FRENTE FRÍO – probabilidad {mostrada:.0f} %</b> · favor de darle seguimiento\n"
-               f"<i>Solo para ti: no se envió al grupo.</i>\nSeñales: {marcas}")
-        pie = ("👉 Se enviará al grupo automáticamente si llega al 100 % (ensamble ≥ "
-               f"{P_CONFIRMADO} %, el modelo lo detecta en las próximas {HORAS_CONFIRMADO} h y lo confirma la NOAA "
-               "o el INSIVUMEH). Si quieres emitirlo antes, escríbeme en Claude <b>«emite la alerta de frente frío»</b>.")
+    color = "🔴" if mostrada >= P_GRUPO else "🟠" if mostrada >= 40 else "🟡"
+    cab = (f"{color} <b>POSIBLE LLEGADA DE FRENTE FRÍO – probabilidad {mostrada:.0f} %</b>"
+           + ("" if al_grupo else " · favor de darle seguimiento") + "\n"
+           + ("<i>✅ El aviso ya se envió al grupo.</i>" if al_grupo else
+              f"<i>Solo para ti: no se envió al grupo{' (' + motivo + ')' if motivo else ''}.</i>")
+           + f"\nSeñales: {marcas}")
+    pie = None if al_grupo else (
+        f"👉 Se avisará al grupo automáticamente cuando la probabilidad llegue a {P_GRUPO} %. "
+        "Si quieres emitirlo antes, escríbeme en Claude <b>«emite la alerta de frente frío»</b>.")
     resumen = "\n\n".join([x for x in [cab, t_prob, t_ecmwf, t_noaa, t_pron, pie,
                             "🗺️ Abajo: gráfica de probabilidad, gráfica del modelo, mapa de la NOAA "
                             "(frente frío = línea azul con triángulos) e imagen satelital del INSIVUMEH."] if x])
     textos = [resumen]
-    if ev and not confirmado:
-        textos.append("👇 <b>Vista previa de la alerta para el grupo</b> (no enviada):\n\n"
-                      + al.mensaje_frente_frio(ev, ahora))
+    if ev and not al_grupo:
+        textos.append("👇 <b>Vista previa del aviso para el grupo</b> (no enviado):\n\n"
+                      + mensaje_grupo(ev, ahora, mostrada))
 
     fotos = []
     if prob:
         gp = os.path.join(BASE, "_grafica_probabilidad.png")
         grafica_probabilidad(prob, mostrada, gp)
-        fotos.append((gp, f"Probabilidad de frente frío en Sipacate: {mostrada:.0f} % sí · {100 - mostrada:.0f} % no"))
+        fotos.append((gp, f"Probabilidad estimada de llegada de frente frío: {mostrada:.0f} % sí · {100 - mostrada:.0f} % no"))
     g = os.path.join(BASE, "_grafica_validacion.png")
     grafica(area, ev, g)
     fotos.append((g, "Modelo ECMWF – Sipacate: presión, temperatura, humedad y viento"))

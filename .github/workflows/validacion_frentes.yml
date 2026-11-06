@@ -25,6 +25,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      actions: read
 
     steps:
       - name: Descargar codigo
@@ -48,4 +49,5 @@ jobs:
           OPENMETEO_APIKEY: ${{ secrets.OPENMETEO_APIKEY }}
           SOLO_MOSTRAR: ${{ inputs.solo_mostrar }}
           EMITIR_GRUPO: ${{ inputs.emitir_grupo }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: python 8_Validacion_Frentes.py
