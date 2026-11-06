@@ -34,7 +34,6 @@ URL_MAPA_NOAA = "https://www.nhc.noaa.gov/tafb_latest/USA_latest.gif"
 URL_SAT_INSIVUMEH = "https://insivumeh.gob.gt/img/guate_truecolor.png"        # GOES-19 color verdadero
 URL_ANIM_INSIVUMEH = "https://insivumeh.gob.gt/img/guate_TrueColor.gif"       # Guatemala, color verdadero (de día)
 URL_ANIM_IR_CA = "https://insivumeh.gob.gt/img/ca_Infrarrojo.gif"             # Centroamérica, infrarrojo (día y noche)
-URL_ANIM_FIRE_CA = "https://insivumeh.gob.gt/img/ca_FireTemp.gif"             # Centroamérica, temperatura de fuego
 URL_BOLETIN_INSIVUMEH = "https://insivumeh.gob.gt/img/Papa_Bravo/Papa_iFoxtrot/Boletin_Informativo.pdf"
 URL_PRONOSTICO_INSIVUMEH = "https://insivumeh.gob.gt/img/Papa_Bravo/Papa_Noviembre/pronostico_diario.pdf"
 # El boletín PDF del INSIVUMEH (nov-2026) es del 23-abr y casi no tiene texto (es imagen):
@@ -264,7 +263,7 @@ def grafica_evolucion(hist, ruta, titulo_extra=""):
     ax.set_xlim(-.6, max(len(x) - .4, 3))
     ax.set_ylim(-3, 112)
     ax.set_ylabel("Probabilidad estimada (%)")
-    ax.set_title("Evolución de la probabilidad de llegada de frente frío (revisión cada 12 h)" + titulo_extra,
+    ax.set_title("Evolución de la probabilidad de llegada de frente frío" + titulo_extra,
                  fontsize=10)
     ax.grid(axis="y", alpha=.3)
     fig.tight_layout()
@@ -304,9 +303,8 @@ def grafica_probabilidad(prob, mostrada, ruta):
     ax.axhline(P_GRUPO, color="#c62828", lw=.8, ls="--")
     ax.text(-.45, P_GRUPO + 2, f"aviso al grupo ({P_GRUPO} %)", ha="left", fontsize=8,
             color="#c62828", bbox=dict(facecolor="white", edgecolor="none", pad=1))
-    ax.set_title(f"Probabilidad estimada de llegada de frente frío (zona de Sipacate): "
-                 f"{mostrada:.0f} % sí · {100 - mostrada:.0f} % no\n"
-                 "(probabilidad de que haya llegado a más tardar cada día · pronóstico, puede cambiar)", fontsize=9.5)
+    ax.set_title(f"Probabilidad estimada de llegada de frente frío: {mostrada:.0f} % sí · {100 - mostrada:.0f} % no",
+                 fontsize=11)
     ax.grid(axis="y", alpha=.3)
     fig.tight_layout()
     fig.savefig(ruta, dpi=110)
@@ -373,11 +371,10 @@ GLOSARIO = [
 def traducir(frase):
     """Traducción automática completa (Google y, si falla, MyMemory). Devuelve None si no hay servicio."""
     try:
-        from deep_translator import GoogleTranslator, MyMemoryTranslator
+        from deep_translator import MyMemoryTranslator
     except Exception:
         return None
-    for nombre, tr in [("Google", lambda: GoogleTranslator(source="en", target="es")),
-                       ("MyMemory", lambda: MyMemoryTranslator(source="en-US", target="es-ES"))]:
+    for nombre, tr in [("MyMemory", lambda: MyMemoryTranslator(source="en-US", target="es-ES"))]:
         try:
             t = tr().translate(frase)
             if t and t.strip().lower() != frase.strip().lower():
