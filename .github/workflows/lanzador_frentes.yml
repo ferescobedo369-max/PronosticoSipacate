@@ -25,12 +25,12 @@ jobs:
         run: |
           DESDE=$(date -u -d '-10 hours' +%Y-%m-%dT%H:%M:%SZ)
           N=$(gh api "repos/$REPO/actions/workflows/validacion_frentes.yml/runs?event=workflow_dispatch&created=>=$DESDE" \
-                --jq '[.workflow_runs[] | select(.conclusion=="success" or .status!="completed")] | length')
-          echo "Revisiones en las ultimas 10 h: $N"
+                --jq '[.workflow_runs[] | select(.display_title=="Revision programada frentes") | select(.conclusion=="success" or .status!="completed")] | length')
+          echo "Revisiones programadas en las ultimas 10 h: $N"
           if [ "$N" -gt 0 ]; then
             echo "Ya se hizo: no se lanza otra."
           else
-            gh workflow run validacion_frentes.yml --repo "$REPO" --ref validacion-frentes
+            gh workflow run validacion_frentes.yml --repo "$REPO" --ref validacion-frentes -f origen=programado
             echo "Revision de frentes lanzada (respaldo)."
           fi
 
