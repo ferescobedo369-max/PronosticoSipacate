@@ -946,29 +946,8 @@ def emitir_al_grupo(area, ahora, prob=None, probabilidad=None, hist=None):
         print("SOLO_MOSTRAR=1: vista previa, no se envía nada.")
         return
 
-    # Destinos: grupo + chats del secret + suscriptores registrados (lista cifrada guardada en main)
-    destinos = list(dict.fromkeys(fijos))
-    try:
-        r = requests.get("https://raw.githubusercontent.com/ferescobedo369-max/PronosticoSipacate/main/"
-                         "3_Suscriptores/suscriptores.enc", timeout=30)
-        if r.ok:
-            os.makedirs(os.path.dirname(al.ARCHIVO_SUSCRIPTORES), exist_ok=True)
-            with open(al.ARCHIVO_SUSCRIPTORES, "wb") as f:
-                f.write(r.content)
-        subs = al.cargar_suscriptores(token)
-        api = al._api(token)
-        grupo = next((c for c in fijos if c.startswith("-")), None)
-        for cid in sorted(subs["personas"]):
-            if cid in destinos:
-                continue
-            if grupo:
-                m = api("getChatMember", chat_id=grupo, user_id=cid)
-                if m.get("ok") and m["result"].get("status") not in al.ESTADOS_MIEMBRO:
-                    continue
-            destinos.append(cid)
-    except Exception as e:
-        print(f"⚠ Suscriptores no disponibles: {e!r}")
-
+    # Destinos: SOLO el grupo general (ids negativos de TELEGRAM_CHAT_ID). Sin copias personales.
+    destinos = [c for c in dict.fromkeys(fijos) if c.startswith("-")]
     enviados = 0
     for c in destinos:
         r = post_telegram(f"{url}/sendMessage", data={"chat_id": c, "text": alerta, "parse_mode": "HTML",
@@ -997,7 +976,7 @@ def emitir_al_grupo(area, ahora, prob=None, probabilidad=None, hist=None):
         print(f"{'✓' if ok else '✗'} alerta a {c}")
     for c in personales:
         post_telegram(f"{url}/sendMessage", data={"chat_id": c, "parse_mode": "HTML",
-                      "text": f"✅ <b>Alerta de frente frío emitida</b> a {enviados} destinos (grupo y chats personales)."},
+                      "text": f"✅ <b>Alerta de frente frío emitida</b> al grupo general."},
                       timeout=30)
 
 
