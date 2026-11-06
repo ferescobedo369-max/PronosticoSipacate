@@ -806,6 +806,8 @@ def emitir_al_grupo(area, ahora, prob=None, probabilidad=None):
 
     alerta = mensaje_grupo(ev, ahora, probabilidad)
     texto_pronostico_insivumeh()                       # descarga el PDF del día
+    ir = os.path.join(BASE, "_satelite_ir_ca_grupo.gif")
+    ir = ir if descargar_animacion(URL_ANIM_IR_CA, ir) else None
     gp = None
     if prob:
         gp = os.path.join(BASE, "_grafica_probabilidad_grupo.png")
@@ -848,6 +850,11 @@ def emitir_al_grupo(area, ahora, prob=None, probabilidad=None):
                 requests.post(f"{url}/sendPhoto", data={"chat_id": c, "caption": "Probabilidad estimada de llegada "
                               "de frente frío (zona de Sipacate). Pronóstico, puede cambiar."},
                               files={"photo": fimg}, timeout=60)
+        if ok and ir:
+            with open(ir, "rb") as fanim:
+                requests.post(f"{url}/sendAnimation", data={"chat_id": c, "caption": "🛰️ Satélite GOES-19 "
+                              "(INSIVUMEH) – infrarrojo de Centroamérica, últimas horas: movimiento de las nubes."},
+                              files={"animation": ("satelite_centroamerica.gif", fanim, "image/gif")}, timeout=120)
         if ok and PDF_INSIVUMEH.get("bytes"):
             cap = "📄 Pronóstico diario del INSIVUMEH" + (f" – {PDF_INSIVUMEH.get('titulo')}" if PDF_INSIVUMEH.get("titulo") else "")
             requests.post(f"{url}/sendDocument", data={"chat_id": c, "caption": cap},
@@ -986,8 +993,6 @@ def main():
     if descargar_animacion(URL_ANIM_IR_CA, ir):
         animaciones.append((ir, "INSIVUMEH – Infrarrojo Centroamérica (día y noche), últimas horas. Un frente "
                                 "suele verse como una banda larga de nubes que avanza desde el Golfo de México"))
-    fire = os.path.join(BASE, "_satelite_fire_ca.gif")
-    descargar_animacion(URL_ANIM_FIRE_CA, fire)          # por ahora solo se revisa (no se envía)
     anim = os.path.join(BASE, "_satelite_insivumeh.gif")
     if 6 <= ahora.hour < 18 and descargar_animacion(URL_ANIM_INSIVUMEH, anim):
         animaciones.append((anim, "INSIVUMEH – GOES-19 color verdadero, animación de las últimas horas. Un frente "
