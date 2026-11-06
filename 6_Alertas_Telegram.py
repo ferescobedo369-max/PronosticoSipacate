@@ -10,7 +10,8 @@ mensaje por Telegram con:
        - Viento medio > UMBRAL_VIENTO
        - Ráfagas      > UMBRAL_RAFAGA
        - Viento que va HACIA el sur, sureste o suroeste (riesgo de pavesa en salineras)
-  3. Posible influencia de frente frío (norte).
+  3. Si el ICC emitió una alerta de frente frío (módulo de frentes), una línea que la recuerda.
+     Este mensaje ya no calcula frentes por su cuenta, para no contradecir al módulo de frentes.
 
 CONVENCIÓN DE DIRECCIÓN (importante):
   Open-Meteo entrega la dirección DE DONDE VIENE el viento (convención meteorológica).
@@ -258,8 +259,36 @@ def alerta_txt(b):
             f"riesgo de pavesa en salineras")
 
 
-def construir_mensaje(area, hoy):
-    frentes = detectar_frente_frio(area)   # usa también el día anterior como referencia
+def estado_frente_icc(horas=72):
+    """¿El ICC emitió una alerta de frente frío al grupo en las últimas horas? Se lee de los logs del
+    workflow de frentes (líneas '✓ alerta a -...'). Devuelve {'emitida', 'prob', 'desde'} o None."""
+    import re
+    import requests
+    tok, repo = os.environ.get("GITHUB_TOKEN"), os.environ.get("GITHUB_REPOSITORY")
+    if not tok or not repo:
+        return None
+    h = {"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"}
+    desde = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=horas)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        runs = requests.get(f"https://api.github.com/repos/{repo}/actions/workflows/validacion_frentes.yml/runs",
+                            headers=h, params={"created": f">={desde}", "per_page": 30}, timeout=30).json()
+        for run in runs.get("workflow_runs", []):               # de la más reciente a la más antigua
+            if run.get("conclusion") != "success":
+                continue
+            for j in requests.get(run["jobs_url"], headers=h, timeout=30).json().get("jobs", []):
+                log = requests.get(f"https://api.github.com/repos/{repo}/actions/jobs/{j['id']}/logs",
+                                   headers=h, timeout=60).text
+                if re.search(r"✓ alerta a -\d+", log):
+                    p = re.search(r"Probabilidad estimada: (\d+) %", log)
+                    d = re.search(r"a partir del <b>([^<]+)</b>", log)
+                    return {"emitida": pd.Timestamp(run["created_at"]).tz_convert(TZ),
+                            "prob": p.group(1) if p else None, "desde": d.group(1) if d else None}
+    except Exception as e:
+        print(f"⚠ No se pudo revisar el estado de frentes fríos: {e!r}")
+    return None
+
+
+def construir_mensaje(area, hoy, frente_icc=None):
     area = area[area["dia"] >= hoy]
     lineas = ["🔥 <b>Perspectiva climática -Sipacate-</b>",
               "<i>Favorable: viento hacia el norte, noreste, noroeste, este u oeste. "
@@ -267,6 +296,17 @@ def construir_mensaje(area, hoy):
               f"⛔ = desfavorable con viento &gt; {UMBRAL_VIENTO:.0f} km/h o ráfagas &gt; {UMBRAL_RAFAGA:.0f} km/h. "
               f"Viento a {ALTURA}.</i>"]
     hay_alerta = False
+    if frente_icc:
+        hay_alerta = True
+        em = frente_icc["emitida"]
+        fe = fecha_txt(em)
+        txt = (f"🌬️ <b>Alerta de frente frío vigente</b>, emitida por el ICC el {fe[0].lower()}{fe[1:]} "
+               f"a las {em:%H:%M}")
+        if frente_icc.get("desde"):
+            txt += f": posible llegada a partir del {frente_icc['desde']}"
+        if frente_icc.get("prob"):
+            txt += f" (probabilidad estimada {frente_icc['prob']} %)"
+        lineas += ["", txt + ". Ver el aviso del ICC en este grupo."]
 
     for dia, d in area.groupby("dia"):
         lineas.append("")
@@ -304,9 +344,6 @@ def construir_mensaje(area, hoy):
         if cambios:
             lineas.append("  🔄 Cambio de dirección de viento: " + " · ".join(cambios))
 
-        if dia in frentes:
-            hay_alerta = True
-            lineas.append(f"  🌬️ <b>Posible influencia de frente frío</b>: {html.escape(frentes[dia])}")
 
     if LINK_PRONOSTICO:
         lineas += ["",
@@ -487,7 +524,7 @@ def main():
     area = resumir_area(descargar(puntos))
 
     hoy = pd.Timestamp.now(tz=TZ).normalize()
-    texto, hay_alerta = construir_mensaje(area, hoy)
+    texto, hay_alerta = construir_mensaje(area, hoy, estado_frente_icc())
     print(texto)
 
     if SOLO_SI_HAY_ALERTA and not hay_alerta:

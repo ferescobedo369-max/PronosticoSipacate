@@ -1,0 +1,47 @@
+name: Lanzador revision frentes frios (respaldo)
+
+# RESPALDO de la tarea de Claude: cada 12 h lanza la revision de frentes frios
+# (workflow validacion_frentes.yml de la rama validacion-frentes) si nadie la lanzo
+# en las ultimas 10 horas. Asi, si una de las dos vias falla, la otra la cubre.
+# 7:10 AM y 7:10 PM hora Guatemala (13:10 y 01:10 UTC).
+on:
+  schedule:
+    - cron: '10 13 * * *'
+    - cron: '10 1 * * *'
+  workflow_dispatch:
+
+jobs:
+  lanzar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+
+    steps:
+      - name: Lanzar la revision si no se hizo en las ultimas 10 horas
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          DESDE=$(date -u -d '-10 hours' +%Y-%m-%dT%H:%M:%SZ)
+          N=$(gh api "repos/$REPO/actions/workflows/validacion_frentes.yml/runs?event=workflow_dispatch&created=>=$DESDE" \
+                --jq '[.workflow_runs[] | select(.conclusion=="success" or .status!="completed")] | length')
+          echo "Revisiones en las ultimas 10 h: $N"
+          if [ "$N" -gt 0 ]; then
+            echo "Ya se hizo: no se lanza otra."
+          else
+            gh workflow run validacion_frentes.yml --repo "$REPO" --ref validacion-frentes
+            echo "Revision de frentes lanzada (respaldo)."
+          fi
+
+      - name: Avisar por Telegram si fallo
+        if: failure()
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          for c in $(echo "$TELEGRAM_CHAT_ID" | tr ',' '\n' | grep -E '^[0-9]+$'); do
+            curl -s -o /dev/null "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=$c" \
+              --data-urlencode "text=⚠️ Falló el lanzador de respaldo de frentes fríos. Detalle: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          done
