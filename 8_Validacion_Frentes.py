@@ -781,7 +781,7 @@ def horas_desde_ultimo_aviso_grupo():
     return None
 
 
-def emitir_al_grupo(area, ahora, prob=None, probabilidad=None):
+def emitir_al_grupo(area, ahora, prob=None, probabilidad=None, hist=None):
     """SOLO cuando el usuario lo autoriza (EMITIR_GRUPO=1): envía la alerta de frente frío al grupo,
     a los chats del secret y a los suscriptores, junto con el pronóstico diario del INSIVUMEH."""
     import requests
@@ -802,7 +802,16 @@ def emitir_al_grupo(area, ahora, prob=None, probabilidad=None):
         raise SystemExit(1)
 
     alerta = mensaje_grupo(ev, ahora, probabilidad)
-    texto_pronostico_insivumeh()                       # descarga el PDF del día
+    # Boletín del INSIVUMEH solo el día antes de que entre el frente o el mismo día (o si ya está)
+    con_boletin = ev["en_curso"] or ev["inicio"].normalize() <= ahora.normalize() + pd.Timedelta(days=1)
+    if con_boletin:
+        texto_pronostico_insivumeh()                   # descarga el PDF del día
+    else:
+        PDF_INSIVUMEH.pop("bytes", None)
+    ge = None
+    if hist:
+        ge = os.path.join(BASE, "_grafica_evolucion_grupo.png")
+        ge = ge if grafica_evolucion(hist, ge) else None
     ir = os.path.join(BASE, "_satelite_ir_ca_grupo.gif")
     ir = ir if descargar_animacion(URL_ANIM_IR_CA, ir) else None
     gp = None
@@ -810,6 +819,9 @@ def emitir_al_grupo(area, ahora, prob=None, probabilidad=None):
         gp = os.path.join(BASE, "_grafica_probabilidad_grupo.png")
         grafica_probabilidad(prob, probabilidad if probabilidad is not None else prob["total"], gp)
     print("ALERTA A EMITIR:\n" + alerta)
+    print(f"Al grupo se enviaría: mensaje + gráfica de evolución {'sí' if ge else 'no'} + gráfica de "
+          f"probabilidad {'sí' if gp else 'no'} + animación infrarroja {'sí' if ir else 'no'} + boletín "
+          f"INSIVUMEH {'sí' if con_boletin else 'no (el frente entra en más de 1 día)'}")
     if solo_mostrar:
         print("SOLO_MOSTRAR=1: vista previa, no se envía nada.")
         return
@@ -842,6 +854,10 @@ def emitir_al_grupo(area, ahora, prob=None, probabilidad=None):
         r = requests.post(f"{url}/sendMessage", data={"chat_id": c, "text": alerta, "parse_mode": "HTML",
                                                       "disable_web_page_preview": "true"}, timeout=30)
         ok = r.ok
+        if ok and ge:
+            with open(ge, "rb") as fimg:
+                requests.post(f"{url}/sendPhoto", data={"chat_id": c, "caption": "Evolución de la probabilidad "
+                              "de llegada de frente frío en cada revisión."}, files={"photo": fimg}, timeout=60)
         if ok and gp:
             with open(gp, "rb") as fimg:
                 requests.post(f"{url}/sendPhoto", data={"chat_id": c, "caption": "Probabilidad estimada de llegada "
@@ -911,7 +927,9 @@ def main():
 
     if os.environ.get("EMITIR_GRUPO") == "1":
         prob = probabilidad_frente(puntos, hoy)
-        emitir_al_grupo(area, ahora, prob, float(round(prob["total"])) if prob else None)
+        p_ = float(round(prob["total"])) if prob else None
+        hist = historial_probabilidad() + ([(ahora, p_)] if p_ is not None else [])
+        emitir_al_grupo(area, ahora, prob, p_, hist)
         return
 
     ev = al.detectar_frente_frio(area, ahora)
@@ -936,6 +954,8 @@ def main():
         print(t_prob + "\n\n" + t_ecmwf + "\n\n" + t_noaa + "\n\n" + t_pron)
         return
 
+    hist = (hist_prueba if prueba else historial_probabilidad()) + [(ahora, float(mostrada))]
+
     # Al grupo: ensamble >= 90 %, máximo un aviso al día (nunca en la prueba)
     al_grupo, motivo = False, ""
     if p_ens >= P_GRUPO and not prueba:
@@ -947,7 +967,7 @@ def main():
         else:
             al_grupo = True
             print(f"Probabilidad {p_ens:.0f} % >= {P_GRUPO} %: se avisa al grupo.")
-            emitir_al_grupo(area, ahora, prob, mostrada)
+            emitir_al_grupo(area, ahora, prob, mostrada, hist)
 
     marcas = " · ".join(f"{n} {'✅' if v else '❌'}" for n, v in senales.items())
     color = "🔴" if mostrada >= P_GRUPO else "🟠" if mostrada >= 40 else "🟡"
@@ -971,7 +991,6 @@ def main():
                       + mensaje_grupo(ev, ahora, mostrada))
 
     fotos = []
-    hist = (hist_prueba if prueba else historial_probabilidad()) + [(ahora, float(mostrada))]
     ge = os.path.join(BASE, "_grafica_evolucion.png")
     if grafica_evolucion(hist, ge, " – PRUEBA" if prueba else ""):
         fotos.append((ge, "Evolución de la probabilidad en cada revisión (cada 12 h)"))
@@ -993,13 +1012,9 @@ def main():
     anim = os.path.join(BASE, "_satelite_insivumeh.gif")
     de_dia = 6 <= ahora.hour < 18                       # el color verdadero sale oscuro de noche
     if de_dia and descargar_animacion(URL_ANIM_INSIVUMEH, anim):
-        animaciones.append((anim, "INSIVUMEH – GOES-19 color verdadero, animación de las últimas horas. Un frente "
-                                  "suele verse como una banda larga de nubes que avanza desde el norte"))
-    elif de_dia:
-        sat = os.path.join(BASE, "_satelite_insivumeh.png")
-        if descargar_imagen(URL_SAT_INSIVUMEH, sat):
-            fotos.append((sat, "INSIVUMEH – GOES-19 color verdadero (Guatemala). Un frente suele verse como "
-                               "una banda larga de nubes que baja desde el Golfo de México"))
+        animaciones.append((anim, "INSIVUMEH – GOES-19 color verdadero de Guatemala, animación de las últimas "
+                                  "horas. Un frente suele verse como una banda larga de nubes que avanza desde el norte"))
+
 
     for t in textos:
         print(t + "\n" + "-" * 60)
