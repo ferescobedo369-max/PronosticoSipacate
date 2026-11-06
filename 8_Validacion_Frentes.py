@@ -845,7 +845,7 @@ def emitir_al_grupo(area, ahora, prob=None, probabilidad=None):
         if ok and gp:
             with open(gp, "rb") as fimg:
                 requests.post(f"{url}/sendPhoto", data={"chat_id": c, "caption": "Probabilidad estimada de llegada "
-                              "de frente frío (zona de Sipacate). Pronóstico, puede cambiar."},
+                              "de frente frío. Pronóstico, puede cambiar."},
                               files={"photo": fimg}, timeout=60)
         if ok and ir:
             with open(ir, "rb") as fanim:
@@ -991,10 +991,11 @@ def main():
         animaciones.append((ir, "INSIVUMEH – Infrarrojo Centroamérica (día y noche), últimas horas. Un frente "
                                 "suele verse como una banda larga de nubes que avanza desde el Golfo de México"))
     anim = os.path.join(BASE, "_satelite_insivumeh.gif")
-    if 6 <= ahora.hour < 18 and descargar_animacion(URL_ANIM_INSIVUMEH, anim):
+    de_dia = 6 <= ahora.hour < 18                       # el color verdadero sale oscuro de noche
+    if de_dia and descargar_animacion(URL_ANIM_INSIVUMEH, anim):
         animaciones.append((anim, "INSIVUMEH – GOES-19 color verdadero, animación de las últimas horas. Un frente "
                                   "suele verse como una banda larga de nubes que avanza desde el norte"))
-    else:
+    elif de_dia:
         sat = os.path.join(BASE, "_satelite_insivumeh.png")
         if descargar_imagen(URL_SAT_INSIVUMEH, sat):
             fotos.append((sat, "INSIVUMEH – GOES-19 color verdadero (Guatemala). Un frente suele verse como "
