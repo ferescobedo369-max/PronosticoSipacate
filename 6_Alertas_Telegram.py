@@ -56,6 +56,9 @@ FF_SUBIDA_PRESION = 2.0          # hPa, subida de presión media respecto al dí
 FF_BAJADA_TEMP = 1.5             # °C, bajada de temperatura media respecto al día anterior
 
 SOLO_SI_HAY_ALERTA = False  # True = no envía nada en días sin alertas
+# El mensaje diario va SOLO a los grupos de TELEGRAM_CHAT_ID (ids negativos).
+# Los chats personales y los suscriptores ya no reciben copia (decisión del ICC, nov-2026).
+ENVIAR_A_PERSONALES = False
 LINK_PRONOSTICO = "https://app.powerbi.com/view?r=eyJrIjoiNGRkMzFlZjMtMzViZi00MjhiLWEzNDYtYzQ3MTEzNWRmNDhhIiwidCI6Ijg5MTkwMzQ4LTg5MjUtNDQxOS1hNTZhLTE3ZDIxOGE3YzgwYyIsImMiOjR9"  # Power BI; vacío = no se muestra
 TZ = "America/Guatemala"
 
@@ -461,9 +464,10 @@ def enviar_telegram(texto):
         return api("sendMessage", chat_id=chat, text=txt, parse_mode="HTML",
                    disable_web_page_preview="true")
 
-    # 1) Destinos fijos (grupo y chats del secret): si fallan, el workflow falla
+    # 1) Destinos: solo los grupos (salvo que se active ENVIAR_A_PERSONALES). Si fallan, el workflow falla
+    destinos = fijos if ENVIAR_A_PERSONALES else [c for c in fijos if c.startswith("-")]
     errores = []
-    for chat in fijos:
+    for chat in destinos:
         r = enviar(chat, texto)
         if r.get("ok"):
             print(f"✓ Mensaje enviado a {chat}")
@@ -471,12 +475,12 @@ def enviar_telegram(texto):
             print(f"✗ Error con {chat}: {r['_status']} {r.get('description')}")
             errores.append(chat)
 
-    # 2) Suscriptores: quienes tocaron Iniciar y siguen en el grupo.
-    #    Si algo falla aquí, no afecta los envíos fijos de arriba.
-    try:
-        enviar_suscriptores(api, token, texto, fijos, grupo, enviar)
-    except Exception as e:
-        print(f"⚠ Error en el envío a suscriptores (el grupo sí recibió el mensaje): {e!r}")
+    # 2) Suscriptores (copia en el chat personal): desactivado
+    if ENVIAR_A_PERSONALES:
+        try:
+            enviar_suscriptores(api, token, texto, fijos, grupo, enviar)
+        except Exception as e:
+            print(f"⚠ Error en el envío a suscriptores (el grupo sí recibió el mensaje): {e!r}")
 
     if errores:
         raise RuntimeError(f"No se pudo enviar a: {', '.join(errores)}")
