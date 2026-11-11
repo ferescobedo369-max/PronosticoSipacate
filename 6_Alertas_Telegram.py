@@ -261,14 +261,15 @@ def transiciones(d):
     res = []
     for i in range(1, len(d)):
         ant, act = d.iloc[i - 1], d.iloc[i]
-        if not (HORA_MONITOREO[0] <= act["hora"] <= HORA_MONITOREO[1]):
+        if not (HORA_MONITOREO[0] <= act["hora"] <= HORA_MONITOREO[1] + 1):
             continue
         if act["desfavorable"] and not ant["desfavorable"] \
                 and act["date"] - ant["date"] == pd.Timedelta(hours=1):
             minuto = minuto_entrada(ant["direccion"], act["direccion"])
             entrada = (ant["date"] + pd.Timedelta(minutes=minuto)).round("10min")
-            res.append((entrada - pd.Timedelta(minutes=MINUTOS_TRANSICION), entrada,
-                        hacia(act["direccion"])))
+            inicio = entrada - pd.Timedelta(minutes=MINUTOS_TRANSICION)
+            if inicio.hour <= HORA_MONITOREO[1]:      # la transición empieza dentro del monitoreo
+                res.append((inicio, entrada, hacia(act["direccion"])))
     return res
 
 
@@ -368,17 +369,21 @@ def construir_mensaje(area, hoy, frente_icc=None):
         malas = [b for b in bl if b["desfavorable"].iloc[0]]
         trans = transiciones(d)
         entrada_de = {ent.hour + (1 if ent.minute else 0): (ini, ent) for ini, ent, _ in trans}
+        items = []                                     # (momento, texto) en orden cronológico
+        for ini, ent, rumbo in trans:
+            items.append((ini, f"  🟡 <b>Transición {ini:%H:%M}–{ent:%H:%M}</b>: el viento empieza a girar "
+                               f"hacia el {rumbo}; entra a zona no favorable a las ~{ent:%H:%M}"))
         for b in malas:
             h0 = b["hora"].iloc[0]
-            if h0 in entrada_de:                       # la transición va justo antes de su bloque
-                ini, ent = entrada_de[h0]
-                lineas.append(f"  🟡 <b>Transición {ini:%H:%M}–{ent:%H:%M}</b>: el viento empieza a girar "
-                              f"hacia el {rumbo_txt(b.head(1))}; entra a zona no favorable a las ~{ent:%H:%M}")
-            lineas.append(f"  • {rango_txt(h0, b['hora'].iloc[-1])}: {alerta_txt(b)}")
+            items.append((b["date"].iloc[0], f"  • {rango_txt(h0, b['hora'].iloc[-1])}: {alerta_txt(b)}"))
+        lineas += [t for _, t in sorted(items, key=lambda x: x[0])]
         if malas:
             hay_alerta = True
             lineas.append("  → <b>Recomendación:</b> No realizar quemas en esos horarios"
                           + (" ni durante la transición." if trans else "."))
+        elif trans:
+            hay_alerta = True
+            lineas.append("  → <b>Recomendación:</b> No realizar quemas durante la transición.")
 
         # --- Cambios de dirección ---
         cambios = []

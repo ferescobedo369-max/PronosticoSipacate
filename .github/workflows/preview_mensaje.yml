@@ -26,6 +26,17 @@ jobs:
           al = importlib.util.module_from_spec(spec); spec.loader.exec_module(al)
           area = al.resumir_area(al.descargar(al.puntos_del_area("1_Shapefile/Area_of_interest.shp")))
           hoy = pd.Timestamp.now(tz=al.TZ).normalize()
+          # Direcciones (de donde viene, grados) leidas de la grafica de Power BI "Direccion del viento a 10m"
+          grafica = {
+              "2026-11-11": [190,12,182,10,9,355,338,321,342,328,303,275,258,251,247,255,264,275,280,282,293,302,318,315],
+              "2026-11-12": [313,325,316,316,308,320,333,333,325,301,273,227,219,221,224,225,235,267,9,35,37,186,172,178],
+              "2026-11-13": [172,180,351,346,355,12,186,164,181,342,204,203,204,206,204,210,218,231,245,247,261,318,43,57],
+          }
+          for dia, vals in grafica.items():
+              for h, v in enumerate(vals):
+                  sel = (area["dia"] == pd.Timestamp(dia, tz=al.TZ)) & (area["hora"] == h)
+                  area.loc[sel, "direccion"] = v
+          area["desfavorable"] = al.en_sector(area["direccion"], al.DIR_DESFAVORABLE)
           print("===== DATOS POR HORA (06-17) =====")
           for _, r in area[(area["dia"] >= hoy) & area["hora"].between(5, 17)].iterrows():
               print(f"{r['date']:%d/%m %H:%M}  viene de {r['direccion']:5.0f}°  va hacia {al.hacia(r['direccion']):9s} "
