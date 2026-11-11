@@ -830,21 +830,21 @@ def fecha_larga(ts):
 
 
 def hora_12(ts):
-    """'3:00 a. m.' / '12:00 p. m.'"""
+    """'3:00 am' / '12:00 pm'"""
     h = ts.hour % 12 or 12
-    return f"{h}:{ts.minute:02d} {'a. m.' if ts.hour < 12 else 'p. m.'}"
+    return f"{h}:{ts.minute:02d} {'am' if ts.hour < 12 else 'pm'}"
 
 
 def mensaje_grupo(ev, ahora, probabilidad=None):
     """Alerta para el grupo general (texto propuesto por los especialistas del ICC),
     redactada como estimación: los pronósticos pueden cambiar."""
     ini = ev["inicio"]
-    cuando = f"<b>{fecha_larga(ini)}</b>, alrededor de las <b>{hora_12(ini)}</b>"   # termina en "m."
+    cuando = f"<b>{fecha_larga(ini)}</b>, alrededor de las <b>{hora_12(ini)}</b>"
     if ev["en_curso"]:
         intro = (f"⛔ Los pronósticos indican que continúa la influencia de un frente frío en Guatemala desde el "
-                 f"{cuando} Su paso podría generar condiciones adversas en Sipacate y su zona buffer.")
+                 f"{cuando}. Su paso podría generar condiciones adversas en Sipacate y su zona buffer.")
     else:
-        intro = (f"⛔ Los pronósticos indican que un frente frío podría ingresar a Guatemala el {cuando} "
+        intro = (f"⛔ Los pronósticos indican que un frente frío podría ingresar a Guatemala el {cuando}. "
                  "Su paso podría generar condiciones adversas en Sipacate y su zona buffer.")
     l = ["🌬️ <b>POSIBLE LLEGADA DE FRENTE FRÍO A GUATEMALA RELEVANTE PARA EL ÁREA DE SIPACATE</b>"]
     if probabilidad is not None:
