@@ -40,13 +40,18 @@ ALTURA = "10m"              # "10m" o "100m" para velocidad y dirección
 HORA_MONITOREO = (6, 17)    # de 06:00 a 17:00 (inclusive)
 HORA_QUEMA = (12, 16)       # ventana acordada en la mesa: 12:00 a 16:00 (inclusive)
 
-# REGLA PRINCIPAL: manda la dirección.
-#   Viento HACIA el norte, noreste, noroeste, este u oeste → favorable (sin importar velocidad).
-#   Viento HACIA el sur, sureste o suroeste → desfavorable; solo ahí se reportan
-#   velocidad y ráfagas (⛔ si superan los umbrales).
+# REGLA PRINCIPAL: manda la dirección (mismo límite que las franjas rojas del Power BI).
+#   Viento HACIA el norte (entre el oeste y el este, pasando por el norte) → favorable.
+#   Viento HACIA el sur (entre el este y el oeste, pasando por el sur, rumbo a las salineras)
+#   → no favorable; solo ahí se reportan velocidad y ráfagas (⛔ si superan los umbrales).
 # Se expresa como dirección DE DONDE VIENE (la que entrega Open-Meteo):
-#   viene del NO, N o NE (292.5° a 67.5°) = va hacia SE, S o SO.
-DIR_DESFAVORABLE = (292.5, 67.5)
+#   viene de 270° a 90° (del oeste, norte o este) = va hacia el sur.
+DIR_DESFAVORABLE = (270.0, 90.0)
+
+# TRANSICIÓN: si a una hora H el viento todavía es favorable pero en la hora siguiente ya entra a la
+# zona no favorable, a partir de H se consideran vientos hacia condiciones no favorables y los
+# MINUTOS_TRANSICION previos (H - 30 min a H) son la fase de transición (el viento se acerca al límite).
+MINUTOS_TRANSICION = 30
 
 # Criterios para "posible frente frío / norte" (heurístico, calibrar con INSIVUMEH)
 FF_SECTOR_NORTE = (315.0, 45.0)  # viento que viene del NO, N o NE
@@ -84,8 +89,14 @@ def nombre_punto(grados):
 
 
 def hacia(dir_desde):
-    """Nombre de hacia dónde VA el viento."""
-    return nombre_punto((dir_desde + 180) % 360)
+    """Nombre de hacia dónde VA el viento. Cerca del este/oeste pero con componente al sur
+    (ya en zona no favorable) se nombra este-sureste / oeste-suroeste."""
+    va = (dir_desde + 180) % 360
+    if 90 < va < 112.5:
+        return "este-sureste"
+    if 247.5 < va < 270:
+        return "oeste-suroeste"
+    return nombre_punto(va)
 
 
 def fecha_txt(ts):
@@ -239,6 +250,23 @@ def detectar_frente_frio(area):
     return res
 
 
+def transiciones(d):
+    """Para un día: [(inicio, inicio_no_favorable, rumbo, hora_entrada)] cada vez que el viento pasa de
+    favorable (hora H) a no favorable (hora H+1), con H dentro del horario de monitoreo.
+    inicio = H - MINUTOS_TRANSICION; inicio_no_favorable = H."""
+    d = d.sort_values("date").reset_index(drop=True)
+    res = []
+    for i in range(1, len(d)):
+        ant, act = d.iloc[i - 1], d.iloc[i]
+        if not (HORA_MONITOREO[0] <= ant["hora"] <= HORA_MONITOREO[1]):
+            continue
+        if act["desfavorable"] and not ant["desfavorable"] \
+                and act["date"] - ant["date"] == pd.Timedelta(hours=1):
+            res.append((ant["date"] - pd.Timedelta(minutes=MINUTOS_TRANSICION), ant["date"],
+                        hacia(act["direccion"]), act["hora"]))
+    return res
+
+
 def rumbo_txt(b):
     """Hacia dónde va el viento en un bloque de horas (promedio vectorial)."""
     rad = np.deg2rad(b["direccion"])
@@ -294,8 +322,9 @@ def estado_frente_icc(horas=72):
 def construir_mensaje(area, hoy, frente_icc=None):
     area = area[area["dia"] >= hoy]
     lineas = ["🔥 <b>Perspectiva climática -Sipacate-</b>",
-              "<i>Favorable: viento hacia el norte, noreste, noroeste, este u oeste. "
-              "Desfavorable: hacia el sur, sureste o suroeste. "
+              "<i>Favorable: viento hacia el norte (entre el oeste y el este). "
+              "No favorable: viento hacia el sur (sur, sureste y suroeste), rumbo a las salineras. "
+              f"🟡 Transición: {MINUTOS_TRANSICION} min antes del cambio de dirección. "
               f"⛔ = desfavorable con viento &gt; {UMBRAL_VIENTO:.0f} km/h o ráfagas &gt; {UMBRAL_RAFAGA:.0f} km/h. "
               f"Viento a {ALTURA}.</i>"]
     hay_alerta = False
@@ -318,34 +347,53 @@ def construir_mensaje(area, hoy, frente_icc=None):
         # --- Ventana de quema 12–16: solo importa la dirección ---
         q = d[d["hora"].between(*HORA_QUEMA)]
         ok = q[~q["desfavorable"]]
-        if len(ok) == len(q):
-            lineas.append(f"✅ Quema {rango_txt(*HORA_QUEMA)}: <b>condiciones favorables</b> "
-                          f"(viento hacia el {rumbo_txt(q)})")
-        elif ok.empty:
+        trans = transiciones(d)
+        inicio_nf = {t[1].hour: t[0] for t in trans}   # hora H -> inicio de la transición
+        tramos, recortado = [], False
+        for a, b in agrupar_horas(ok["hora"]):
+            if b in inicio_nf:                         # el tramo termina donde empieza la transición
+                recortado = True
+                if b > a:
+                    tramos.append(f"{a:02d}:00–{inicio_nf[b]:%H:%M}")
+            else:
+                tramos.append(rango_txt(a, b))
+        if len(ok) == len(q) and not recortado:
+            lineas.append(f"✅ <b>Quema: {rango_txt(*HORA_QUEMA)}</b>")
+        elif not tramos:
             hay_alerta = True
-            lineas.append(f"⛔ Quema {rango_txt(*HORA_QUEMA)}: <b>NO se recomienda quemar</b>")
+            lineas.append(f"⛔ <b>Quema {rango_txt(*HORA_QUEMA)}: NO se recomienda quemar</b>")
         else:
             hay_alerta = True
-            buenas = ", ".join(rango_txt(a, b) for a, b in agrupar_horas(ok["hora"]))
-            lineas.append(f"⚠️ Quema: <b>solo recomendable {buenas}</b>")
+            lineas.append(f"⚠️ <b>Quema: {', '.join(tramos)}</b>")
 
-        # --- 06–17: horas con viento hacia las salineras ---
+        # --- TARDE: transición cerca del final de la ventana de quema (lo que más importa a los ingenios) ---
+        tarde = [t for t in trans if t[1].hour >= HORA_QUEMA[0]]
+        manana = [t for t in trans if t[1].hour < HORA_QUEMA[0]]
+        for ini, h_nf, rumbo, _ in tarde:
+            hay_alerta = True
+            fin_quema = d["date"].iloc[0].normalize() + pd.Timedelta(hours=HORA_QUEMA[1])
+            reco = (f"finalizar las quemas antes de las <b>{ini:%H:%M}</b>." if ini <= fin_quema
+                    else f"no extender las quemas después de las <b>{ini:%H:%M}</b>.")
+            lineas += [f"🟠 <b>ATENCIÓN EN LA TARDE – fase de transición {ini:%H:%M}–{h_nf:%H:%M}</b>",
+                       "El viento empieza a cambiar de dirección y se acerca a condiciones no favorables.",
+                       f"A partir de las <b>{h_nf:%H:%M}</b> inician vientos no favorables.",
+                       f"→ <b>Recomendación:</b> {reco}"]
+
+        # --- 06–17: horas con viento hacia las salineras (y transiciones de la mañana, sin detalle) ---
         m = d[d["hora"].between(*HORA_MONITOREO)]
         bl = bloques(m, "desfavorable")
         malas = [b for b in bl if b["desfavorable"].iloc[0]]
+        items = []                                     # (momento, texto) en orden cronológico
+        for ini, h_nf, _, _ in manana:
+            items.append((ini, f"🟡 Transición {ini:%H:%M}–{h_nf:%H:%M}"))
         for b in malas:
-            lineas.append(f"  • {rango_txt(b['hora'].iloc[0], b['hora'].iloc[-1])}: {alerta_txt(b)}")
-        if malas:
+            items.append((b["date"].iloc[0],
+                          f"• {rango_txt(b['hora'].iloc[0], b['hora'].iloc[-1])}: {alerta_txt(b)}"))
+        lineas += [t for _, t in sorted(items, key=lambda x: x[0])]
+        if malas or manana:
             hay_alerta = True
-            lineas.append("  → <b>Recomendación:</b> No realizar quemas en esos horarios.")
-
-        # --- Cambios de dirección ---
-        cambios = []
-        for nxt in bl[1:]:
-            h, r = nxt["hora"].iloc[0], hacia(nxt["direccion"].iloc[0])
-            cambios.append(f"{h:02d}:00 gira hacia el {r} " + ("⚠️" if nxt["desfavorable"].iloc[0] else "✅"))
-        if cambios:
-            lineas.append("  🔄 Cambio de dirección de viento: " + " · ".join(cambios))
+            lineas.append("→ <b>Recomendación:</b> No realizar quemas en esos horarios"
+                          + (" ni durante la transición." if manana else "."))
 
 
     if LINK_PRONOSTICO:
