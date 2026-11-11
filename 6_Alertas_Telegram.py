@@ -361,23 +361,35 @@ def construir_mensaje(area, hoy, frente_icc=None):
             hay_alerta = True
             lineas.append(f"⚠️ Quema: <b>solo recomendable {', '.join(tramos)}</b>")
 
-        # --- 06–17: horas con viento hacia las salineras ---
+        # --- TARDE: transición cerca del final de la ventana de quema (lo que más importa a los ingenios) ---
+        tarde = [t for t in trans if t[1].hour >= HORA_QUEMA[0]]
+        manana = [t for t in trans if t[1].hour < HORA_QUEMA[0]]
+        for ini, h_nf, rumbo, _ in tarde:
+            hay_alerta = True
+            fin_quema = d["date"].iloc[0].normalize() + pd.Timedelta(hours=HORA_QUEMA[1])
+            reco = (f"finalizar las quemas antes de las <b>{ini:%H:%M}</b>." if ini <= fin_quema
+                    else f"no extender quemas después de las <b>{ini:%H:%M}</b>.")
+            lineas += [f"🟠 <b>ATENCIÓN EN LA TARDE – fase de transición {ini:%H:%M}–{h_nf:%H:%M}</b>",
+                       f"   El viento empieza a cambiar de dirección y se acerca a condiciones no favorables "
+                       f"(hacia el {rumbo}).",
+                       f"   A partir de las <b>{h_nf:%H:%M}</b> inician vientos no favorables.",
+                       f"   → <b>Recomendación:</b> {reco}"]
+
+        # --- 06–17: horas con viento hacia las salineras (y transiciones de la mañana, sin detalle) ---
         m = d[d["hora"].between(*HORA_MONITOREO)]
         bl = bloques(m, "desfavorable")
         malas = [b for b in bl if b["desfavorable"].iloc[0]]
         items = []                                     # (momento, texto) en orden cronológico
-        for ini, h_nf, rumbo, _ in trans:
-            items.append((ini, f"  🟡 <b>Transición {ini:%H:%M}–{h_nf:%H:%M}</b>: el viento se acerca al límite; "
-                               f"a partir de las <b>{h_nf:%H:%M}</b> inician vientos hacia condiciones "
-                               f"no favorables (hacia el {rumbo})"))
+        for ini, h_nf, _, _ in manana:
+            items.append((ini, f"  🟡 Transición {ini:%H:%M}–{h_nf:%H:%M}"))
         for b in malas:
             items.append((b["date"].iloc[0],
                           f"  • {rango_txt(b['hora'].iloc[0], b['hora'].iloc[-1])}: {alerta_txt(b)}"))
         lineas += [t for _, t in sorted(items, key=lambda x: x[0])]
-        if malas or trans:
+        if malas or manana:
             hay_alerta = True
             lineas.append("  → <b>Recomendación:</b> No realizar quemas en esos horarios"
-                          + (" ni a partir del inicio de la transición." if trans else "."))
+                          + (" ni durante la transición." if manana else "."))
 
         # --- Cambios de dirección ---
         cambios = []

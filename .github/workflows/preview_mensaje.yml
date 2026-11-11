@@ -1,7 +1,6 @@
 name: Vista previa mensaje Telegram (NO envia)
 
-# Solo muestra el mensaje en el log. No recibe ningun secret de Telegram,
-# asi que no puede enviar nada.
+# Muestra el mensaje en el log y lo envia SOLO al chat personal del dueno (nunca a grupos).
 on:
   push:
     branches: [preview-transicion]
@@ -17,7 +16,10 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install geopandas shapely numpy pandas requests openmeteo-requests requests-cache retry-requests
-      - name: Mostrar mensaje (sin enviar)
+      - name: Mostrar mensaje (y vista previa solo al chat personal)
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           python - <<'PY'
           import importlib.util, os
@@ -44,4 +46,15 @@ jobs:
           texto, _ = al.construir_mensaje(area, hoy)
           print("===== MENSAJE =====")
           print(texto)
+          # Envio SOLO al chat personal del dueno (ids positivos). Nunca a grupos (ids negativos).
+          import re
+          personales = [c for c in re.findall(r"-?\d+", os.environ.get("TELEGRAM_CHAT_ID", "")) if not c.startswith("-")]
+          tok = al._token()
+          if tok and personales:
+              api = al._api(tok)
+              cab = "🧪 <b>VISTA PREVIA – solo para ti</b> (no se envió al grupo; direcciones de la gráfica de Power BI)\n\n"
+              for c in personales:
+                  assert not c.startswith("-")
+                  r = api("sendMessage", chat_id=c, text=cab + texto, parse_mode="HTML", disable_web_page_preview="true")
+                  print("✓ vista previa al chat personal" if r.get("ok") else f"✗ {r.get('description')}")
           PY
