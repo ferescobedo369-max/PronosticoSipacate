@@ -40,17 +40,17 @@ ALTURA = "10m"              # "10m" o "100m" para velocidad y dirección
 HORA_MONITOREO = (6, 17)    # de 06:00 a 17:00 (inclusive)
 HORA_QUEMA = (12, 16)       # ventana acordada en la mesa: 12:00 a 16:00 (inclusive)
 
-# REGLA PRINCIPAL: manda la dirección.
-#   Viento HACIA el norte, noreste, noroeste, este u oeste → favorable (sin importar velocidad).
-#   Viento HACIA el sur, sureste o suroeste → desfavorable; solo ahí se reportan
-#   velocidad y ráfagas (⛔ si superan los umbrales).
+# REGLA PRINCIPAL: manda la dirección (mismo límite que las franjas rojas del Power BI).
+#   Viento HACIA el norte (entre el oeste y el este, pasando por el norte) → favorable.
+#   Viento HACIA el sur (entre el este y el oeste, pasando por el sur, rumbo a las salineras)
+#   → no favorable; solo ahí se reportan velocidad y ráfagas (⛔ si superan los umbrales).
 # Se expresa como dirección DE DONDE VIENE (la que entrega Open-Meteo):
-#   viene del NO, N o NE (292.5° a 67.5°) = va hacia SE, S o SO.
-DIR_DESFAVORABLE = (292.5, 67.5)
+#   viene de 270° a 90° (del oeste, norte o este) = va hacia el sur.
+DIR_DESFAVORABLE = (270.0, 90.0)
 
-# TRANSICIÓN: minutos antes de que el viento entre a la zona no favorable, cuando ya empieza a
-# girar. La hora de entrada se estima interpolando la dirección entre los datos horarios del
-# modelo (por el camino más corto del giro) y se redondea a 10 minutos.
+# TRANSICIÓN: si a una hora H el viento todavía es favorable pero en la hora siguiente ya entra a la
+# zona no favorable, a partir de H se consideran vientos hacia condiciones no favorables y los
+# MINUTOS_TRANSICION previos (H - 30 min a H) son la fase de transición (el viento se acerca al límite).
 MINUTOS_TRANSICION = 30
 
 # Criterios para "posible frente frío / norte" (heurístico, calibrar con INSIVUMEH)
@@ -244,32 +244,20 @@ def detectar_frente_frio(area):
     return res
 
 
-def minuto_entrada(d0, d1):
-    """Minutos (1–60) después de la hora anterior en que la dirección cruza a la zona no favorable,
-    interpolando de d0 (favorable) a d1 (desfavorable) por el giro más corto."""
-    delta = ((d1 - d0 + 180) % 360) - 180
-    for minuto in range(1, 61):
-        if en_sector(d0 + delta * minuto / 60, DIR_DESFAVORABLE):
-            return minuto
-    return 60
-
-
 def transiciones(d):
-    """Para un día: [(inicio, entrada, rumbo)] cada vez que el viento pasa de favorable a no favorable
-    dentro del horario de monitoreo. inicio/entrada son Timestamps (entrada redondeada a 10 min)."""
+    """Para un día: [(inicio, inicio_no_favorable, rumbo, hora_entrada)] cada vez que el viento pasa de
+    favorable (hora H) a no favorable (hora H+1), con H dentro del horario de monitoreo.
+    inicio = H - MINUTOS_TRANSICION; inicio_no_favorable = H."""
     d = d.sort_values("date").reset_index(drop=True)
     res = []
     for i in range(1, len(d)):
         ant, act = d.iloc[i - 1], d.iloc[i]
-        if not (HORA_MONITOREO[0] <= act["hora"] <= HORA_MONITOREO[1] + 1):
+        if not (HORA_MONITOREO[0] <= ant["hora"] <= HORA_MONITOREO[1]):
             continue
         if act["desfavorable"] and not ant["desfavorable"] \
                 and act["date"] - ant["date"] == pd.Timedelta(hours=1):
-            minuto = minuto_entrada(ant["direccion"], act["direccion"])
-            entrada = (ant["date"] + pd.Timedelta(minutes=minuto)).round("10min")
-            inicio = entrada - pd.Timedelta(minutes=MINUTOS_TRANSICION)
-            if inicio.hour <= HORA_MONITOREO[1]:      # la transición empieza dentro del monitoreo
-                res.append((inicio, entrada, hacia(act["direccion"])))
+            res.append((ant["date"] - pd.Timedelta(minutes=MINUTOS_TRANSICION), ant["date"],
+                        hacia(act["direccion"]), act["hora"]))
     return res
 
 
@@ -328,8 +316,9 @@ def estado_frente_icc(horas=72):
 def construir_mensaje(area, hoy, frente_icc=None):
     area = area[area["dia"] >= hoy]
     lineas = ["🔥 <b>Perspectiva climática -Sipacate-</b>",
-              "<i>Favorable: viento hacia el norte, noreste, noroeste, este u oeste. "
-              "Desfavorable: hacia el sur, sureste o suroeste. "
+              "<i>Favorable: viento hacia el norte (entre el oeste y el este). "
+              "No favorable: viento hacia el sur (entre el este y el oeste), rumbo a las salineras. "
+              f"🟡 Transición: {MINUTOS_TRANSICION} min previos al inicio de vientos no favorables. "
               f"⛔ = desfavorable con viento &gt; {UMBRAL_VIENTO:.0f} km/h o ráfagas &gt; {UMBRAL_RAFAGA:.0f} km/h. "
               f"Viento a {ALTURA}.</i>"]
     hay_alerta = False
@@ -352,49 +341,57 @@ def construir_mensaje(area, hoy, frente_icc=None):
         # --- Ventana de quema 12–16: solo importa la dirección ---
         q = d[d["hora"].between(*HORA_QUEMA)]
         ok = q[~q["desfavorable"]]
-        if len(ok) == len(q):
+        trans = transiciones(d)
+        inicio_nf = {t[1].hour: t[0] for t in trans}   # hora H -> inicio de la transición
+        tramos, recortado = [], False
+        for a, b in agrupar_horas(ok["hora"]):
+            if b in inicio_nf:                         # el tramo termina donde empieza la transición
+                recortado = True
+                if b > a:
+                    tramos.append(f"{a:02d}:00–{inicio_nf[b]:%H:%M}")
+            else:
+                tramos.append(rango_txt(a, b))
+        if len(ok) == len(q) and not recortado:
             lineas.append(f"✅ Quema {rango_txt(*HORA_QUEMA)}: <b>condiciones favorables</b> "
                           f"(viento hacia el {rumbo_txt(q)})")
-        elif ok.empty:
+        elif not tramos:
             hay_alerta = True
             lineas.append(f"⛔ Quema {rango_txt(*HORA_QUEMA)}: <b>NO se recomienda quemar</b>")
         else:
             hay_alerta = True
-            buenas = ", ".join(rango_txt(a, b) for a, b in agrupar_horas(ok["hora"]))
-            lineas.append(f"⚠️ Quema: <b>solo recomendable {buenas}</b>")
+            lineas.append(f"⚠️ Quema: <b>solo recomendable {', '.join(tramos)}</b>")
 
         # --- 06–17: horas con viento hacia las salineras ---
         m = d[d["hora"].between(*HORA_MONITOREO)]
         bl = bloques(m, "desfavorable")
         malas = [b for b in bl if b["desfavorable"].iloc[0]]
-        trans = transiciones(d)
-        entrada_de = {ent.hour + (1 if ent.minute else 0): (ini, ent) for ini, ent, _ in trans}
         items = []                                     # (momento, texto) en orden cronológico
-        for ini, ent, rumbo in trans:
-            items.append((ini, f"  🟡 <b>Transición {ini:%H:%M}–{ent:%H:%M}</b>: el viento empieza a girar "
-                               f"hacia el {rumbo}; entra a zona no favorable a las ~{ent:%H:%M}"))
+        for ini, h_nf, rumbo, _ in trans:
+            items.append((ini, f"  🟡 <b>Transición {ini:%H:%M}–{h_nf:%H:%M}</b>: el viento se acerca al límite; "
+                               f"a partir de las <b>{h_nf:%H:%M}</b> inician vientos hacia condiciones "
+                               f"no favorables (hacia el {rumbo})"))
         for b in malas:
-            h0 = b["hora"].iloc[0]
-            items.append((b["date"].iloc[0], f"  • {rango_txt(h0, b['hora'].iloc[-1])}: {alerta_txt(b)}"))
+            items.append((b["date"].iloc[0],
+                          f"  • {rango_txt(b['hora'].iloc[0], b['hora'].iloc[-1])}: {alerta_txt(b)}"))
         lineas += [t for _, t in sorted(items, key=lambda x: x[0])]
-        if malas:
+        if malas or trans:
             hay_alerta = True
             lineas.append("  → <b>Recomendación:</b> No realizar quemas en esos horarios"
-                          + (" ni durante la transición." if trans else "."))
-        elif trans:
-            hay_alerta = True
-            lineas.append("  → <b>Recomendación:</b> No realizar quemas durante la transición.")
+                          + (" ni a partir del inicio de la transición." if trans else "."))
 
         # --- Cambios de dirección ---
         cambios = []
+        h_nf_de = {t[3]: t[1] for t in trans}          # hora de entrada -> hora H de inicio no favorable
         for nxt in bl[1:]:
             h, r = nxt["hora"].iloc[0], hacia(nxt["direccion"].iloc[0])
-            hora = f"{entrada_de[h][1]:%H:%M}" if h in entrada_de else f"{h:02d}:00"
-            cambios.append(f"{hora} gira hacia el {r} " + ("⚠️" if nxt["desfavorable"].iloc[0] else "✅"))
+            if nxt["desfavorable"].iloc[0] and h in h_nf_de:
+                cambios.append(f"{h_nf_de[h]:%H:%M} inicia giro hacia el {r} ⚠️")
+            else:
+                cambios.append(f"{h:02d}:00 gira hacia el {r} " + ("⚠️" if nxt["desfavorable"].iloc[0] else "✅"))
         inicios = {b["hora"].iloc[0] for b in bl}
-        for ini, ent, rumbo in trans:                   # entradas justo después de las 17:00
-            if ent.hour + (1 if ent.minute else 0) not in inicios:
-                cambios.append(f"{ent:%H:%M} gira hacia el {rumbo} ⚠️")
+        for _, h_nf, rumbo, h_ent in trans:            # entradas justo después de las 17:00
+            if h_ent not in inicios:
+                cambios.append(f"{h_nf:%H:%M} inicia giro hacia el {rumbo} ⚠️")
         if cambios:
             lineas.append("  🔄 Cambio de dirección de viento: " + " · ".join(cambios))
 
