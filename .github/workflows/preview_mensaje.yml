@@ -1,0 +1,36 @@
+name: Vista previa mensaje Telegram (NO envia)
+
+# Solo muestra el mensaje en el log. No recibe ningun secret de Telegram,
+# asi que no puede enviar nada.
+on:
+  push:
+    branches: [preview-transicion]
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install geopandas shapely numpy pandas requests openmeteo-requests requests-cache retry-requests
+      - name: Mostrar mensaje (sin enviar)
+        run: |
+          python - <<'PY'
+          import importlib.util, os
+          import pandas as pd
+          spec = importlib.util.spec_from_file_location("al", "6_Alertas_Telegram.py")
+          al = importlib.util.module_from_spec(spec); spec.loader.exec_module(al)
+          area = al.resumir_area(al.descargar(al.puntos_del_area("1_Shapefile/Area_of_interest.shp")))
+          hoy = pd.Timestamp.now(tz=al.TZ).normalize()
+          print("===== DATOS POR HORA (06-17) =====")
+          for _, r in area[(area["dia"] >= hoy) & area["hora"].between(5, 17)].iterrows():
+              print(f"{r['date']:%d/%m %H:%M}  viene de {r['direccion']:5.0f}°  va hacia {al.hacia(r['direccion']):9s} "
+                    f"{'NO FAVORABLE' if r['desfavorable'] else ''}")
+          texto, _ = al.construir_mensaje(area, hoy)
+          print("===== MENSAJE =====")
+          print(texto)
+          PY

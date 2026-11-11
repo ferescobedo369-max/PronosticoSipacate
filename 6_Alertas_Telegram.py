@@ -48,6 +48,11 @@ HORA_QUEMA = (12, 16)       # ventana acordada en la mesa: 12:00 a 16:00 (inclus
 #   viene del NO, N o NE (292.5° a 67.5°) = va hacia SE, S o SO.
 DIR_DESFAVORABLE = (292.5, 67.5)
 
+# TRANSICIÓN: minutos antes de que el viento entre a la zona no favorable, cuando ya empieza a
+# girar. La hora de entrada se estima interpolando la dirección entre los datos horarios del
+# modelo (por el camino más corto del giro) y se redondea a 10 minutos.
+MINUTOS_TRANSICION = 30
+
 # Criterios para "posible frente frío / norte" (heurístico, calibrar con INSIVUMEH)
 FF_SECTOR_NORTE = (315.0, 45.0)  # viento que viene del NO, N o NE
 FF_HORAS_NORTE = 6               # horas mínimas del día con viento del norte
@@ -239,6 +244,34 @@ def detectar_frente_frio(area):
     return res
 
 
+def minuto_entrada(d0, d1):
+    """Minutos (1–60) después de la hora anterior en que la dirección cruza a la zona no favorable,
+    interpolando de d0 (favorable) a d1 (desfavorable) por el giro más corto."""
+    delta = ((d1 - d0 + 180) % 360) - 180
+    for minuto in range(1, 61):
+        if en_sector(d0 + delta * minuto / 60, DIR_DESFAVORABLE):
+            return minuto
+    return 60
+
+
+def transiciones(d):
+    """Para un día: [(inicio, entrada, rumbo)] cada vez que el viento pasa de favorable a no favorable
+    dentro del horario de monitoreo. inicio/entrada son Timestamps (entrada redondeada a 10 min)."""
+    d = d.sort_values("date").reset_index(drop=True)
+    res = []
+    for i in range(1, len(d)):
+        ant, act = d.iloc[i - 1], d.iloc[i]
+        if not (HORA_MONITOREO[0] <= act["hora"] <= HORA_MONITOREO[1]):
+            continue
+        if act["desfavorable"] and not ant["desfavorable"] \
+                and act["date"] - ant["date"] == pd.Timedelta(hours=1):
+            minuto = minuto_entrada(ant["direccion"], act["direccion"])
+            entrada = (ant["date"] + pd.Timedelta(minutes=minuto)).round("10min")
+            res.append((entrada - pd.Timedelta(minutes=MINUTOS_TRANSICION), entrada,
+                        hacia(act["direccion"])))
+    return res
+
+
 def rumbo_txt(b):
     """Hacia dónde va el viento en un bloque de horas (promedio vectorial)."""
     rad = np.deg2rad(b["direccion"])
@@ -333,17 +366,26 @@ def construir_mensaje(area, hoy, frente_icc=None):
         m = d[d["hora"].between(*HORA_MONITOREO)]
         bl = bloques(m, "desfavorable")
         malas = [b for b in bl if b["desfavorable"].iloc[0]]
+        trans = transiciones(d)
+        entrada_de = {ent.hour + (1 if ent.minute else 0): (ini, ent) for ini, ent, _ in trans}
         for b in malas:
-            lineas.append(f"  • {rango_txt(b['hora'].iloc[0], b['hora'].iloc[-1])}: {alerta_txt(b)}")
+            h0 = b["hora"].iloc[0]
+            if h0 in entrada_de:                       # la transición va justo antes de su bloque
+                ini, ent = entrada_de[h0]
+                lineas.append(f"  🟡 <b>Transición {ini:%H:%M}–{ent:%H:%M}</b>: el viento empieza a girar "
+                              f"hacia el {rumbo_txt(b.head(1))}; entra a zona no favorable a las ~{ent:%H:%M}")
+            lineas.append(f"  • {rango_txt(h0, b['hora'].iloc[-1])}: {alerta_txt(b)}")
         if malas:
             hay_alerta = True
-            lineas.append("  → <b>Recomendación:</b> No realizar quemas en esos horarios.")
+            lineas.append("  → <b>Recomendación:</b> No realizar quemas en esos horarios"
+                          + (" ni durante la transición." if trans else "."))
 
         # --- Cambios de dirección ---
         cambios = []
         for nxt in bl[1:]:
             h, r = nxt["hora"].iloc[0], hacia(nxt["direccion"].iloc[0])
-            cambios.append(f"{h:02d}:00 gira hacia el {r} " + ("⚠️" if nxt["desfavorable"].iloc[0] else "✅"))
+            hora = f"{entrada_de[h][1]:%H:%M}" if h in entrada_de else f"{h:02d}:00"
+            cambios.append(f"{hora} gira hacia el {r} " + ("⚠️" if nxt["desfavorable"].iloc[0] else "✅"))
         if cambios:
             lineas.append("  🔄 Cambio de dirección de viento: " + " · ".join(cambios))
 
