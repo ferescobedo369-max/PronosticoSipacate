@@ -1,4 +1,4 @@
-name: Vista previa mensaje Telegram (NO envia)
+name: Vista previa mensaje Telegram (solo chat personal)
 
 # Muestra el mensaje en el log y lo envia SOLO al chat personal del dueno (nunca a grupos).
 on:
