@@ -391,6 +391,10 @@ def construir_mensaje(area, hoy, frente_icc=None):
             h, r = nxt["hora"].iloc[0], hacia(nxt["direccion"].iloc[0])
             hora = f"{entrada_de[h][1]:%H:%M}" if h in entrada_de else f"{h:02d}:00"
             cambios.append(f"{hora} gira hacia el {r} " + ("⚠️" if nxt["desfavorable"].iloc[0] else "✅"))
+        inicios = {b["hora"].iloc[0] for b in bl}
+        for ini, ent, rumbo in trans:                   # entradas justo después de las 17:00
+            if ent.hour + (1 if ent.minute else 0) not in inicios:
+                cambios.append(f"{ent:%H:%M} gira hacia el {rumbo} ⚠️")
         if cambios:
             lineas.append("  🔄 Cambio de dirección de viento: " + " · ".join(cambios))
 
