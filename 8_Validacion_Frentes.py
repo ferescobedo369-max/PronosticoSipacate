@@ -820,57 +820,57 @@ def detectar_para_emitir(area, ahora):
          al.FF_HORAS_NORTE, al.FF_VIENTO_MIN) = orig
 
 
+MESES_LARGOS = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
+                "septiembre", "octubre", "noviembre", "diciembre"]
+
+
+def fecha_larga(ts):
+    """'martes 10 de noviembre'"""
+    return f"{al.DIAS[ts.weekday()].lower()} {ts.day} de {MESES_LARGOS[ts.month - 1]}"
+
+
+def hora_12(ts):
+    """'3:00 a. m.' / '12:00 p. m.'"""
+    h = ts.hour % 12 or 12
+    return f"{h}:{ts.minute:02d} {'a. m.' if ts.hour < 12 else 'p. m.'}"
+
+
 def mensaje_grupo(ev, ahora, probabilidad=None):
-    """Alerta para el grupo, redactada como estimación (pronósticos que pueden cambiar)."""
+    """Alerta para el grupo general (texto propuesto por los especialistas del ICC),
+    redactada como estimación: los pronósticos pueden cambiar."""
     ini = ev["inicio"]
-    f = al.fecha_txt(ini)
-    cuando = f"{f[0].lower()}{f[1:]}, alrededor de las {ini.hour:02d}:00"
+    cuando = f"<b>{fecha_larga(ini)}</b>, alrededor de las <b>{hora_12(ini)}</b>"   # termina en "m."
     if ev["en_curso"]:
-        intro = (f"Los pronósticos indican que continúa la influencia de un frente frío en Guatemala desde el "
-                 f"<b>{cuando}</b>, con posibles condiciones adversas para las quemas de caña de azúcar en "
-                 "Sipacate y su zona buffer.")
+        intro = (f"⛔ Los pronósticos indican que continúa la influencia de un frente frío en Guatemala desde el "
+                 f"{cuando} Su paso podría generar condiciones adversas en Sipacate y su zona buffer.")
     else:
-        intro = (f"Los pronósticos indican la posible llegada de un frente frío a Guatemala a partir del "
-                 f"<b>{cuando}</b>, con posibles condiciones adversas para las quemas de caña de azúcar en "
-                 "Sipacate y su zona buffer.")
-    l = ["🌬️ <b>POSIBLE LLEGADA DE FRENTE FRÍO A GUATEMALA</b>", "<b>Perspectiva climática -Sipacate-</b>"]
+        intro = (f"⛔ Los pronósticos indican que un frente frío podría ingresar a Guatemala el {cuando} "
+                 "Su paso podría generar condiciones adversas en Sipacate y su zona buffer.")
+    l = ["🌬️ <b>POSIBLE LLEGADA DE FRENTE FRÍO A GUATEMALA RELEVANTE PARA EL ÁREA DE SIPACATE</b>"]
     if probabilidad is not None:
-        l.append(f"📈 <b>Probabilidad estimada: {probabilidad:.0f} %</b>")
-    l += ["", "⛔ <b>Posibles condiciones adversas para las quemas</b>", intro, "",
-          "⚠️ <b>Condiciones estimadas</b>",
-          f"• <b>Duración:</b> se estima que durante unas <b>{ev['horas']} horas</b> predominen vientos con "
-          f"dirección <b>hacia el {ev['rumbo']}</b>.",
-          f"• <b>Viento:</b> velocidad promedio de <b>{ev['viento']:.0f} km/h</b> y ráfagas de hasta "
-          f"<b>{ev['rafaga']:.0f} km/h</b>."]
+        l.append(f"📈 <b>Probabilidad estimada de llegada del frente frío: {probabilidad:.0f} %</b>")
+    # "relativamente altas" solo si el viento promedio supera el umbral de las alertas (15 km/h)
+    altas = "se esperan velocidades relativamente altas, con un promedio" if ev["viento"] >= al.UMBRAL_VIENTO \
+        else "se espera una velocidad promedio"
+    l += ["", intro, "",
+          "⚠️ <b>Condiciones previstas</b>",
+          f"• <b>Duración:</b> se estiman condiciones adversas durante aproximadamente <b>{ev['horas']} horas</b>.",
+          f"• <b>Viento:</b> {altas} de <b>{ev['viento']:.0f} km/h</b> y ráfagas de hasta "
+          f"<b>{ev['rafaga']:.0f} km/h</b>, con direcciones predominantes <b>hacia el {ev['rumbo']}</b>."]
     t = f"• <b>Temperatura:</b> podría descender hasta <b>{ev['tmin']:.0f} °C</b>"
     if ev["baja_t"] >= 1:
         t += f", unos {ev['baja_t']:.0f} °C menos que en días anteriores"
     l.append(t + ".")
-    if ev.get("humedad") is not None and not np.isnan(ev["humedad"]):
-        l.append(f"• <b>Humedad relativa:</b> podría bajar hasta <b>{ev['humedad']:.0f} %</b>.")
-    if ev["dp"] >= 1:
-        l.append(f"• <b>Presión atmosférica:</b> aumento de <b>{ev['dp']:.0f} hPa</b>, "
-                 "una señal típica del ingreso del frente.")
-    l += ["", "📌 <b>Recomendación:</b> seguir las instrucciones emitidas por <b>ASAZGUA</b> al momento "
-              "de realizar cualquier quema durante el día.", "",
-          "🔎 El <b>ICC</b> dará seguimiento a este fenómeno y a la evolución de las condiciones "
-          "atmosféricas. Manténgase atento a este grupo para las actualizaciones."]
+    l += ["", "📌 <b>Recomendación:</b> seguir las recomendaciones de <b>ASAZGUA</b> para las quemas de caña "
+              "durante el período indicado en este comunicado.", "",
+          "🔎 El <b>ICC</b> dará seguimiento al frente frío y a la evolución de las condiciones atmosféricas. "
+          "Por favor, manténganse atentos a este grupo, donde se compartirán actualizaciones relevantes."]
     if al.LINK_PRONOSTICO:
-        # Power BI muestra hoy + 2 días: el día del frente aparece 2 días antes
-        dia_frente = max(ini.normalize(), ahora.normalize())
-        desde = dia_frente - pd.Timedelta(days=2)
-        fd = al.fecha_txt(dia_frente)
-        fd = fd[0].lower() + fd[1:]
-        if desde <= ahora.normalize():
-            pbi = f"📊 Ya puede consultar en Power BI el pronóstico de velocidad y dirección de viento para el <b>{fd}</b>:"
-        else:
-            fs = al.fecha_txt(desde)
-            pbi = (f"📊 El pronóstico de velocidad y dirección de viento para el <b>{fd}</b> podrá consultarse en "
-                   f"Power BI a partir del <b>{fs[0].lower()}{fs[1:]}</b> (desde las 6:30 a. m.), ya que muestra "
-                   "los próximos 3 días:")
-        l += ["", pbi, html.escape(al.LINK_PRONOSTICO)]
-    l += ["", "<i>Información basada en pronósticos y estimaciones, que pueden cambiar. "
-              "Se actualizará conforme evolucione el fenómeno.</i>"]
+        l += ["", "📊 El pronóstico detallado de velocidad y dirección del viento en Sipacate para los siguientes "
+                  "tres días se puede consultar en el siguiente tablero:",
+              html.escape(al.LINK_PRONOSTICO)]
+    l += ["", "<i>Información basada en pronósticos oficiales y estimaciones internacionales y en datos de la "
+              "red meteorológica del ICC.</i>"]
     return "\n".join(l)
 
 
