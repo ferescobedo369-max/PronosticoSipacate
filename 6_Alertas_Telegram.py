@@ -89,8 +89,14 @@ def nombre_punto(grados):
 
 
 def hacia(dir_desde):
-    """Nombre de hacia dónde VA el viento."""
-    return nombre_punto((dir_desde + 180) % 360)
+    """Nombre de hacia dónde VA el viento. Cerca del este/oeste pero con componente al sur
+    (ya en zona no favorable) se nombra este-sureste / oeste-suroeste."""
+    va = (dir_desde + 180) % 360
+    if 90 < va < 112.5:
+        return "este-sureste"
+    if 247.5 < va < 270:
+        return "oeste-suroeste"
+    return nombre_punto(va)
 
 
 def fecha_txt(ts):
@@ -317,8 +323,8 @@ def construir_mensaje(area, hoy, frente_icc=None):
     area = area[area["dia"] >= hoy]
     lineas = ["🔥 <b>Perspectiva climática -Sipacate-</b>",
               "<i>Favorable: viento hacia el norte (entre el oeste y el este). "
-              "No favorable: viento hacia el sur (entre el este y el oeste), rumbo a las salineras. "
-              f"🟡 Transición: {MINUTOS_TRANSICION} min previos al inicio de vientos no favorables. "
+              "No favorable: viento hacia el sur (sur, sureste y suroeste), rumbo a las salineras. "
+              f"🟡 Transición: {MINUTOS_TRANSICION} min antes del cambio de dirección. "
               f"⛔ = desfavorable con viento &gt; {UMBRAL_VIENTO:.0f} km/h o ráfagas &gt; {UMBRAL_RAFAGA:.0f} km/h. "
               f"Viento a {ALTURA}.</i>"]
     hay_alerta = False
@@ -352,14 +358,13 @@ def construir_mensaje(area, hoy, frente_icc=None):
             else:
                 tramos.append(rango_txt(a, b))
         if len(ok) == len(q) and not recortado:
-            lineas.append(f"✅ Quema {rango_txt(*HORA_QUEMA)}: <b>condiciones favorables</b> "
-                          f"(viento hacia el {rumbo_txt(q)})")
+            lineas.append(f"✅ <b>Quema: {rango_txt(*HORA_QUEMA)}</b>")
         elif not tramos:
             hay_alerta = True
-            lineas.append(f"⛔ Quema {rango_txt(*HORA_QUEMA)}: <b>NO se recomienda quemar</b>")
+            lineas.append(f"⛔ <b>Quema {rango_txt(*HORA_QUEMA)}: NO se recomienda quemar</b>")
         else:
             hay_alerta = True
-            lineas.append(f"⚠️ Quema: <b>solo recomendable {', '.join(tramos)}</b>")
+            lineas.append(f"⚠️ <b>Quema: {', '.join(tramos)}</b>")
 
         # --- TARDE: transición cerca del final de la ventana de quema (lo que más importa a los ingenios) ---
         tarde = [t for t in trans if t[1].hour >= HORA_QUEMA[0]]
@@ -368,12 +373,11 @@ def construir_mensaje(area, hoy, frente_icc=None):
             hay_alerta = True
             fin_quema = d["date"].iloc[0].normalize() + pd.Timedelta(hours=HORA_QUEMA[1])
             reco = (f"finalizar las quemas antes de las <b>{ini:%H:%M}</b>." if ini <= fin_quema
-                    else f"no extender quemas después de las <b>{ini:%H:%M}</b>.")
+                    else f"no extender las quemas después de las <b>{ini:%H:%M}</b>.")
             lineas += [f"🟠 <b>ATENCIÓN EN LA TARDE – fase de transición {ini:%H:%M}–{h_nf:%H:%M}</b>",
-                       f"   El viento empieza a cambiar de dirección y se acerca a condiciones no favorables "
-                       f"(hacia el {rumbo}).",
-                       f"   A partir de las <b>{h_nf:%H:%M}</b> inician vientos no favorables.",
-                       f"   → <b>Recomendación:</b> {reco}"]
+                       "El viento empieza a cambiar de dirección y se acerca a condiciones no favorables.",
+                       f"A partir de las <b>{h_nf:%H:%M}</b> inician vientos no favorables.",
+                       f"→ <b>Recomendación:</b> {reco}"]
 
         # --- 06–17: horas con viento hacia las salineras (y transiciones de la mañana, sin detalle) ---
         m = d[d["hora"].between(*HORA_MONITOREO)]
@@ -381,31 +385,15 @@ def construir_mensaje(area, hoy, frente_icc=None):
         malas = [b for b in bl if b["desfavorable"].iloc[0]]
         items = []                                     # (momento, texto) en orden cronológico
         for ini, h_nf, _, _ in manana:
-            items.append((ini, f"  🟡 Transición {ini:%H:%M}–{h_nf:%H:%M}"))
+            items.append((ini, f"🟡 Transición {ini:%H:%M}–{h_nf:%H:%M}"))
         for b in malas:
             items.append((b["date"].iloc[0],
-                          f"  • {rango_txt(b['hora'].iloc[0], b['hora'].iloc[-1])}: {alerta_txt(b)}"))
+                          f"• {rango_txt(b['hora'].iloc[0], b['hora'].iloc[-1])}: {alerta_txt(b)}"))
         lineas += [t for _, t in sorted(items, key=lambda x: x[0])]
         if malas or manana:
             hay_alerta = True
-            lineas.append("  → <b>Recomendación:</b> No realizar quemas en esos horarios"
+            lineas.append("→ <b>Recomendación:</b> No realizar quemas en esos horarios"
                           + (" ni durante la transición." if manana else "."))
-
-        # --- Cambios de dirección ---
-        cambios = []
-        h_nf_de = {t[3]: t[1] for t in trans}          # hora de entrada -> hora H de inicio no favorable
-        for nxt in bl[1:]:
-            h, r = nxt["hora"].iloc[0], hacia(nxt["direccion"].iloc[0])
-            if nxt["desfavorable"].iloc[0] and h in h_nf_de:
-                cambios.append(f"{h_nf_de[h]:%H:%M} inicia giro hacia el {r} ⚠️")
-            else:
-                cambios.append(f"{h:02d}:00 gira hacia el {r} " + ("⚠️" if nxt["desfavorable"].iloc[0] else "✅"))
-        inicios = {b["hora"].iloc[0] for b in bl}
-        for _, h_nf, rumbo, h_ent in trans:            # entradas justo después de las 17:00
-            if h_ent not in inicios:
-                cambios.append(f"{h_nf:%H:%M} inicia giro hacia el {rumbo} ⚠️")
-        if cambios:
-            lineas.append("  🔄 Cambio de dirección de viento: " + " · ".join(cambios))
 
 
     if LINK_PRONOSTICO:
