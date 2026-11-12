@@ -223,6 +223,54 @@ def resumir_area(df_all):
     return area
 
 
+CSV_POWERBI = "2_Results/Area_forecast_latest.csv"
+
+
+def leer_area_powerbi(hoy):
+    """Lee el MISMO archivo que usa el Power BI (lo genera el boletín ~4:00 am), para que el mensaje
+    diga exactamente lo que muestra el tablero. Se toma la versión más reciente de GitHub y, si no se
+    puede, la copia local. Devuelve None si el archivo no es de hoy (entonces se descarga el pronóstico)."""
+    import io
+    import requests
+    txt = None
+    tok, repo = os.environ.get("GITHUB_TOKEN"), os.environ.get("GITHUB_REPOSITORY")
+    if tok and repo:
+        try:
+            r = requests.get(f"https://api.github.com/repos/{repo}/contents/{CSV_POWERBI}?ref=main",
+                             headers={"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github.raw"},
+                             timeout=30)
+            if r.ok:
+                txt = r.text
+        except Exception as e:
+            print(f"No se pudo leer el CSV de GitHub: {e}")
+    if txt is None:
+        ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)), CSV_POWERBI)
+        if os.path.exists(ruta):
+            txt = open(ruta, encoding="utf-8").read()
+    if not txt:
+        return None
+    df = pd.read_csv(io.StringIO(txt))
+    df["date"] = pd.to_datetime(df["date"], utc=True).dt.tz_convert(TZ)
+    if df["date"].min().normalize() != hoy or len(df) < 48:
+        print(f"El CSV del Power BI no es de hoy (empieza {df['date'].min():%d/%m %H:%M}): se descarga el pronóstico.")
+        return None
+    area = pd.DataFrame({
+        "date": df["date"],
+        "viento": df[f"wind_speed_{ALTURA}"],
+        "viento_max": df[f"wind_speed_{ALTURA}"],
+        "rafaga": df["wind_gusts_10m"],
+        "direccion": df[f"wind_direction_{ALTURA}"] % 360,
+        "temp": np.nan, "presion": np.nan,
+    })
+    area["dia"] = area["date"].dt.normalize()
+    area["hora"] = area["date"].dt.hour
+    area["desfavorable"] = en_sector(area["direccion"], DIR_DESFAVORABLE)
+    area["fuerte"] = area["viento"] > UMBRAL_VIENTO
+    area["rafaga_fuerte"] = area["rafaga"] > UMBRAL_RAFAGA
+    print(f"Datos: mismo CSV del Power BI ({len(area)} horas desde {area['date'].min():%d/%m %H:%M}).")
+    return area
+
+
 # =============================================================
 # 3. Evaluación y mensaje
 # =============================================================
@@ -252,13 +300,14 @@ def detectar_frente_frio(area):
 
 def transiciones(d):
     """Para un día: [(inicio, inicio_no_favorable, rumbo, hora_entrada)] cada vez que el viento pasa de
-    favorable (hora H) a no favorable (hora H+1), con H dentro del horario de monitoreo.
+    favorable (hora H) a no favorable (hora H+1), con la transición empezando dentro del monitoreo
+    (H hasta las 18:00: transición 17:30–18:00).
     inicio = H - MINUTOS_TRANSICION; inicio_no_favorable = H."""
     d = d.sort_values("date").reset_index(drop=True)
     res = []
     for i in range(1, len(d)):
         ant, act = d.iloc[i - 1], d.iloc[i]
-        if not (HORA_MONITOREO[0] <= ant["hora"] <= HORA_MONITOREO[1]):
+        if not (HORA_MONITOREO[0] <= ant["hora"] <= HORA_MONITOREO[1] + 1):
             continue
         if act["desfavorable"] and not ant["desfavorable"] \
                 and act["date"] - ant["date"] == pd.Timedelta(hours=1):
@@ -571,18 +620,22 @@ def main():
     base = os.path.dirname(os.path.abspath(__file__))
     shp = os.path.join(base, "1_Shapefile", "Area_of_interest.shp")
 
-    puntos = puntos_del_area(shp)
-    print(f"Usando {len(puntos)} puntos dentro del área.")
-    area = resumir_area(descargar(puntos))
+    # Se espera primero a la hora de envío, para usar el CSV más reciente del boletín
+    esperar_hasta(os.environ.get("ESPERAR_HASTA", ""))
 
     hoy = pd.Timestamp.now(tz=TZ).normalize()
+    area = leer_area_powerbi(hoy)
+    if area is None:                      # respaldo: si el boletín de hoy no está, se descarga
+        puntos = puntos_del_area(shp)
+        print(f"Usando {len(puntos)} puntos dentro del área.")
+        area = resumir_area(descargar(puntos))
+
     texto, hay_alerta = construir_mensaje(area, hoy, estado_frente_icc())
     print(texto)
 
     if SOLO_SI_HAY_ALERTA and not hay_alerta:
         print("Sin alertas: no se envía mensaje.")
         return
-    esperar_hasta(os.environ.get("ESPERAR_HASTA", ""))
     enviar_telegram(texto)
 
 
